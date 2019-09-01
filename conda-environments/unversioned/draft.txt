@@ -1,0 +1,22 @@
+conda:
+    tensorflow-gpu
+    wxpython
+    jupyter
+    pytables
+    chardet~=3.0.4
+    click
+    pandas
+    patsy
+    pyyaml
+    opencv
+    requests
+    ruamel_yaml
+    scikit-image
+    scikit-learn
+    statsmodels
+    tqdm
+
+from pip:
+    easydict~=1.7
+    moviepy~=0.2.3.5
+    scikit-video

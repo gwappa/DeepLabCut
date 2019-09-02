@@ -28,12 +28,138 @@ from deeplabcut.utils import auxiliaryfunctions
 from matplotlib.backends.backend_wxagg import FigureCanvasWxAgg as FigureCanvas
 from matplotlib.backends.backend_wxagg import NavigationToolbar2WxAgg as NavigationToolbar
 
+DEBUG = True
+
+def debug(msg, end='\n', flush=True):
+    import sys
+    if DEBUG == True:
+        print(msg, file=sys.stderr, end=end, flush=flush)
+
+def dataframe_from_imagenames(image_names, scorer, bodyparts):
+    arr    = np.empty((len(image_names), 2), dtype=float)
+    arr[:] = np.nan
+    frames = []
+    for bodypart in bodyparts:
+        index = pd.MultiIndex.from_product([[scorer], [bodypart], ['x', 'y']],names=['scorer', 'bodyparts', 'coords'])
+        frames.append(pd.DataFrame(a, columns = index, index = image_names))
+    return pd.concat(frames, axis=1)
+
+class DirectoryRef:
+    """a proxy of the image directory being read."""
+    path       = None
+    name       = None
+    config     = None
+    children   = None
+    dataset    = None
+    size       = 0
+    currentidx = 0
+
+    def __init__(self, path, config):
+        self.path   = Path(path)
+        self.name   = self.path.name
+        self.config = config
+        if not self.path.is_dir():
+            raise NotADirectoryError(self.path)
+        self.children = []
+        self.size     = 0
+        for child in sorted(self.path.glob('*.png')):
+            if child.name.endswith('labeled.png'):
+                continue
+            self.children.append(ImageRef(child, self.size, parent=self))
+            self.size += 1
+        debug(f"{self.size} images read from: {self.path}")
+        self.dataset = self._load_dataset()
+
+    def __getattr__(self, name):
+        if name == 'current':
+            return self.children[self.currentidx]
+
+    def _load_dataset(self):
+        relativeimagenames = [child.relative for child in self.children]
+        try:
+            data = pd.read_hdf(str(self.path / f"CollectedData_{self.config.scorer}.h5"), 'df_with_missing')
+
+            # Checking for new frames and adding them to the existing dataframe
+            newimages = set(relativeimagenames) - set(data.index)
+            if len(newimages) > 0:
+                print("Found new frames..")
+                addendum = dataframe_from_imagenames(sorted(newimages), self.config.scorer, self.config.bodyparts)
+                data     = pd.concat([data, addendum], axis=0)
+
+            # Sort it by the index values
+            data.sort_index(inplace=True)
+            self.currentidx = self._seek_next(data)
+            return data
+        except:
+            self.currentidx = 0
+            return dataframe_from_imagenames(relativeimagenames, self.config.scorer, self.config.bodyparts)
+
+    def _seek_next(self, data):
+        """returns the first empty row in `data`, or zero if there are no empty rows."""
+        for idx, rowidx in enumerate(data.index):
+            if np.all(np.isnan(self.dataFrame.loc[rowidx,:].values)) == True:
+                return idx
+        return 0
+
+    def add_bodyparts(self, new_bodyparts):
+        """update its dataset by extending the set of body parts by `new_bodyparts`.
+        the index to the current image will be reset to zero."""
+        relativeimagenames = [child.relative for child in self.children]
+        addendum        = dataframe_from_imagenames(relativeimagenames, self.config.scorer, new_bodyparts)
+        self.dataset    = pd.concat([self.dataset, addendum], axis=1)
+        self.currentidx = 0
+
+
+class ImageRef:
+    """a proxy of the image to be read."""
+    index    = -1
+    path     = None
+    parent   = None
+
+    def __init__(self, path, index=-1, parent=None):
+        self.path = Path(path)
+        if index >= 0:
+            self.index = index
+        if parent is not None:
+            self.parent = parent
+        self._relative = str(self.path.relative_to(self._get_project_root()))
+
+    def __getattr__(self, name):
+        """'content', 'relative' and 'name' are retrieved dynamically."""
+        if name == 'content':
+            # convert the image to RGB as you are showing the image with matplotlib
+            return cv2.imread(str(self.path))[...,::-1]
+        elif name == 'relative':
+            return self._relative
+        elif name == 'name':
+            return self.path.name
+
+    def __eq__(self, other):
+        return isinstance(other, ImageRef) and self.path == other.path
+
+    def as_title(self):
+        """generates the string to be used for the title bar."""
+        if self.parent is not None:
+            return "{index}/{total} {name}".format(index=self.index, total=self.parent.size, name=self.name)
+        else:
+            debug(f"no parent seems to be set for {self.name}")
+            return self.name
+
+    def _get_project_root(self):
+        """returns the 'project root' to generate relative path to be used as an entry index in the dataset."""
+        # find the "labeled-data" directory
+        for parentdir in self.path.parents:
+            if 'labeled' in parentdir.name:
+                # assume that its parent directory to be the project-root
+                return parentdir.parent
+        raise ValueError("cannot detect the project root")
+
 # ###########################################################################
 # Class for GUI MainFrame
 # ###########################################################################
 class ImagePanel(wx.Panel):
 
-    def __init__(self, parent,config,gui_size,**kwargs):
+    def __init__(self, parent, config, gui_size,**kwargs):
         h=gui_size[0]/2
         w=gui_size[1]/3
         wx.Panel.__init__(self, parent, -1,style=wx.SUNKEN_BORDER,size=(h,w))
@@ -43,6 +169,8 @@ class ImagePanel(wx.Panel):
         self.canvas = FigureCanvas(self, -1, self.figure)
         self.orig_xlim = None
         self.orig_ylim = None
+        self.prev_xlim = None
+        self.prev_ylim = None
         self.sizer = wx.BoxSizer(wx.VERTICAL)
         self.sizer.Add(self.canvas, 1, wx.LEFT | wx.TOP | wx.GROW)
         self.SetSizer(self.sizer)
@@ -51,13 +179,15 @@ class ImagePanel(wx.Panel):
     def getfigure(self):
         return(self.figure)
 
-    def drawplot(self,img,img_name,itr,index,bodyparts,cmap,keep_view=False):
-        xlim = self.axes.get_xlim()
-        ylim = self.axes.get_ylim()
+    def clearplot(self):
+        """clears its contents. xlim/ylim is stored for a possible later usage."""
+        self.prev_xlim = self.axes.get_xlim()
+        self.prev_ylim = self.axes.get_ylim()
         self.axes.clear()
+        self.figure.delaxes(self.figure.axes[1]) # removes the colorbar
 
-        # convert the image to RGB as you are showing the image with matplotlib
-        im = cv2.imread(img)[...,::-1]
+    def drawplot(self, imgref, bodyparts, cmap, keep_view=False):
+        im = imgref.content
         ax = self.axes.imshow(im,cmap=cmap)
         self.orig_xlim = self.axes.get_xlim()
         self.orig_ylim = self.axes.get_ylim()
@@ -66,10 +196,11 @@ class ImagePanel(wx.Panel):
         cax = divider.append_axes("right", size="5%", pad=0.05)
         cbar = self.figure.colorbar(ax, cax=cax,spacing='proportional', ticks=colorIndex)
         cbar.set_ticklabels(bodyparts[::-1])
-        self.axes.set_title(str(str(itr)+"/"+str(len(index)-1) +" "+ img_name ))
+        self.axes.set_title(imgref.as_title())
         if keep_view:
-            self.axes.set_xlim(xlim)
-            self.axes.set_ylim(ylim)
+            if self.prev_xlim is not None:
+                self.axes.set_xlim(self.prev_xlim)
+                self.axes.set_ylim(ylim)
         self.toolbar = NavigationToolbar(self.canvas)
         return(self.figure,self.axes,self.canvas,self.toolbar)
 
@@ -77,16 +208,14 @@ class ImagePanel(wx.Panel):
         self.axes.set_xlim(self.orig_xlim)
         self.axes.set_ylim(self.orig_ylim)
 
-    def getColorIndices(self,img,bodyparts):
+    def getColorIndices(self,imgref,bodyparts):
         """
         Returns the colormaps ticks and . The order of ticks labels is reversed.
         """
-        im = cv2.imread(img)
+        im = imgref.content
         norm = mcolors.Normalize(vmin=0, vmax=np.max(im))
         ticks = np.linspace(0,np.max(im),len(bodyparts))[::-1]
         return norm, ticks
-
-
 
 class WidgetPanel(wx.Panel):
     def __init__(self, parent):
@@ -149,6 +278,11 @@ class MainFrame(wx.Frame):
         vSplitter = wx.SplitterWindow(topSplitter)
 
         self.image_panel = ImagePanel(vSplitter, config,self.gui_size)
+        self.image_panel.axes.callbacks.connect('xlim_changed', self.onZoom)
+        self.image_panel.axes.callbacks.connect('ylim_changed', self.onZoom)
+        self.cidClick = self.image_panel.canvas.mpl_connect('button_press_event', self.onClick)
+        self.image_panel.canvas.mpl_connect('button_release_event', self.onButtonRelease)
+
         self.choice_panel = ScrollPanel(vSplitter)
         vSplitter.SplitVertically(self.image_panel,self.choice_panel, sashPosition=self.gui_size[0]*0.8)
         vSplitter.SetSashGravity(1)
@@ -230,6 +364,7 @@ class MainFrame(wx.Frame):
         self.updatedCoords = []
         self.dataFrame = None
         self.config_file = config
+        self.updateWithConfigFile()
         self.new_labels = False
         self.buttonCounter = []
         self.bodyparts2plot = []
@@ -274,12 +409,12 @@ class MainFrame(wx.Frame):
         self.buttonCounter = []
         self.markerSize = self.slider.GetValue()
         img_name = Path(self.index[self.iter]).name
-        self.figure.delaxes(self.figure.axes[1])
+        self.image_panel.clearplot()
         self.figure,self.axes,self.canvas,self.toolbar = self.image_panel.drawplot(self.img,img_name,self.iter,self.index,self.bodyparts,self.colormap,keep_view=True)
 
         self.axes.callbacks.connect('xlim_changed', self.onZoom)
         self.axes.callbacks.connect('ylim_changed', self.onZoom)
-        self.buttonCounter = MainFrame.plot(self,self.img)
+        self.buttonCounter = self.initLabels(self.dir.current)
 
     def quitButton(self, event):
         """
@@ -295,8 +430,7 @@ class MainFrame(wx.Frame):
             self.dataFrame = None
             self.bodyparts = []
             self.new_labels = self.new_labels
-            self.axes.clear()
-            self.figure.delaxes(self.figure.axes[1])
+            self.image_panel.clearplot()
             self.choiceBox.Clear(True)
             MainFrame.updateZoomPan(self)
             MainFrame.browseDir(self, event)
@@ -409,127 +543,168 @@ class MainFrame(wx.Frame):
         cwd = os.path.join(os.getcwd(),'labeled-data')
         dlg = wx.DirDialog(self, "Choose the directory where your extracted frames are saved:",cwd, style = wx.DD_DEFAULT_STYLE)
         if dlg.ShowModal() == wx.ID_OK:
-            self.dir = dlg.GetPath()
-            self.load.Enable(False)
-            self.next.Enable(True)
-            self.save.Enable(True)
+            self.setDirectory(dlg.GetPath())
+            dlg.Destroy()
         else:
             dlg.Destroy()
             self.Close(True)
-        dlg.Destroy()
 
-# Enabling the zoom, pan and home buttons
+#
+# # Reading the existing dataset,if already present
+#         try:
+#             self.dataFrame = pd.read_hdf(self.dir.get_h5file(self.scorer),'df_with_missing')
+#             self.dataFrame.sort_index(inplace=True)
+#
+# # Finds the first empty row in the dataframe and sets the iteration to that index
+#             for idx,j in enumerate(self.dataFrame.index):
+#                 values = self.dataFrame.loc[j,:].values
+#                 if np.prod(np.isnan(values)) == 1:
+#                     self.iter = idx
+#                     break
+#                 else:
+#                     self.iter = 0
+#
+#         except:
+#             a = np.empty((len(self.index),2,))
+#             a[:] = np.nan
+#             for bodypart in self.bodyparts:
+#                 index = pd.MultiIndex.from_product([[self.scorer], [bodypart], ['x', 'y']],names=['scorer', 'bodyparts', 'coords'])
+#                 frame = pd.DataFrame(a, columns = index, index = self.relativeimagenames)
+#                 self.dataFrame = pd.concat([self.dataFrame, frame],axis=1)
+#             self.iter = 0
+#
+# # Reading the image name
+#         self.img = self.index[self.iter]
+#         img_name = Path(self.index[self.iter]).name
+#         self.norm,self.colorIndex = self.image_panel.getColorIndices(self.img,self.bodyparts)
+#
+# # Checking for new frames and adding them to the existing dataframe
+#         old_imgs = np.sort(list(self.dataFrame.index))
+#         self.newimages = list(set(self.relativeimagenames) - set(old_imgs))
+#         if self.newimages == []:
+#             pass
+#         else:
+#             print("Found new frames..")
+# # Create an empty dataframe with all the new images and then merge this to the existing dataframe.
+#             self.df=None
+#             a = np.empty((len(self.newimages),2,))
+#             a[:] = np.nan
+#             for bodypart in self.bodyparts:
+#                 index = pd.MultiIndex.from_product([[self.scorer], [bodypart], ['x', 'y']],names=['scorer', 'bodyparts', 'coords'])
+#                 frame = pd.DataFrame(a, columns = index, index = self.newimages)
+#                 self.df = pd.concat([self.df, frame],axis=1)
+#             self.dataFrame = pd.concat([self.dataFrame, self.df],axis=0)
+# # Sort it by the index values
+#             self.dataFrame.sort_index(inplace=True)
+#
+#
+# # Extracting the list of new labels
+#         oldBodyParts = self.dataFrame.columns.get_level_values(1)
+#         _, idx = np.unique(oldBodyParts, return_index=True)
+#         oldbodyparts2plot =  list(oldBodyParts[np.sort(idx)])
+#         self.new_bodyparts =  [x for x in self.bodyparts if x not in oldbodyparts2plot ]
+# # Checking if user added a new label
+#         if self.new_bodyparts==[]: # i.e. no new label
+#             self.figure,self.axes,self.canvas,self.toolbar = self.image_panel.drawplot(self.img,img_name,self.iter,self.index,self.bodyparts,self.colormap)
+#             self.axes.callbacks.connect('xlim_changed', self.onZoom)
+#             self.axes.callbacks.connect('ylim_changed', self.onZoom)
+#
+#             self.choiceBox,self.rdb,self.slider,self.checkBox = self.choice_panel.addRadioButtons(self.bodyparts,self.file,self.markerSize)
+#             self.buttonCounter = MainFrame.plot(self,self.img)
+#             self.cidClick = self.canvas.mpl_connect('button_press_event', self.onClick)
+#             self.canvas.mpl_connect('button_release_event', self.onButtonRelease)
+#         else:
+#             dlg = wx.MessageDialog(None,"New label found in the config file. Do you want to see all the other labels?", "New label found",wx.YES_NO | wx.ICON_WARNING)
+#             result = dlg.ShowModal()
+#             if result == wx.ID_NO:
+#                 self.bodyparts = self.new_bodyparts
+#                 self.norm,self.colorIndex = self.image_panel.getColorIndices(self.img,self.bodyparts)
+#             a = np.empty((len(self.index),2,))
+#             a[:] = np.nan
+#             for bodypart in self.new_bodyparts:
+#                 index = pd.MultiIndex.from_product([[self.scorer], [bodypart], ['x', 'y']],names=['scorer', 'bodyparts', 'coords'])
+#                 frame = pd.DataFrame(a, columns = index, index = self.relativeimagenames)
+#                 self.dataFrame = pd.concat([self.dataFrame, frame],axis=1)
+#
+#             self.figure,self.axes,self.canvas,self.toolbar = self.image_panel.drawplot(self.img,img_name,self.iter,self.index,self.bodyparts,self.colormap)
+#             self.axes.callbacks.connect('xlim_changed', self.onZoom)
+#             self.axes.callbacks.connect('ylim_changed', self.onZoom)
+#
+#             self.choiceBox,self.rdb,self.slider,self.checkBox = self.choice_panel.addRadioButtons(self.bodyparts,self.file,self.markerSize)
+#             self.cidClick = self.canvas.mpl_connect('button_press_event', self.onClick)
+#             self.canvas.mpl_connect('button_release_event', self.onButtonRelease)
+#             self.buttonCounter = MainFrame.plot(self,self.img)
+
+        self.checkBox.Bind(wx.EVT_CHECKBOX,self.activateSlider)
+        self.slider.Bind(wx.EVT_SLIDER,self.OnSliderScroll)
+
+    def setDirectory(self, path):
+        """updates the current working image directory."""
+        ## FIXME: 'config' may be better separated as an object
+        self.dir = DirectoryRef(path, self)
+
+        ## FIXME
+        # self.relativeimagenames=['labeled'+n.split('labeled')[1] for n in self.index]#[n.split(self.project_path+'/')[1] for n in self.index]
+
+        ## TODO: may be better handled using some events/signals
+        self.load.Enable(False)
+        self.next.Enable(True)
+        self.save.Enable(True)
+
+        # Enabling the zoom, pan and home buttons
+        ## TODO: may be better handled using some events/signals
         self.zoom.Enable(True)
         self.home.Enable(True)
         self.pan.Enable(True)
         self.lock.Enable(True)
 
-# Reading config file and its variables
-        self.cfg = auxiliaryfunctions.read_config(self.config_file)
-        self.scorer = self.cfg['scorer']
-        self.bodyparts = self.cfg['bodyparts']
-        self.videos = self.cfg['video_sets'].keys()
-        self.markerSize = self.cfg['dotsize']
-        self.alpha = self.cfg['alphavalue']
-        self.colormap = plt.get_cmap(self.cfg['colormap'])
-        self.colormap = self.colormap.reversed()
-        self.project_path=self.cfg['project_path']
-        self.index =np.sort([fn for fn in glob.glob(os.path.join(self.dir,'*.png')) if ('labeled.png' not in fn)])
-        self.statusbar.SetStatusText('Working on folder: {}'.format(os.path.split(str(self.dir))[-1]))
-        self.relativeimagenames=['labeled'+n.split('labeled')[1] for n in self.index]#[n.split(self.project_path+'/')[1] for n in self.index]
+        self.prev.Enable(self.dir.current > 0)
+        self.statusbar.SetStatusText('Working on folder: {}'.format(dir.name))
 
-# Reading the existing dataset,if already present
-        try:
-            self.dataFrame = pd.read_hdf(os.path.join(self.dir,'CollectedData_'+self.scorer+'.h5'),'df_with_missing')
-            self.dataFrame.sort_index(inplace=True)
-            self.prev.Enable(True)
+        self.checkBodyPartsConsistency()
 
-# Finds the first empty row in the dataframe and sets the iteration to that index
-            for idx,j in enumerate(self.dataFrame.index):
-                values = self.dataFrame.loc[j,:].values
-                if np.prod(np.isnan(values)) == 1:
-                    self.iter = idx
-                    break
-                else:
-                    self.iter = 0
+        self.figure,self.axes,self.canvas,self.toolbar = self.image_panel.drawplot(self.dir.current, self.bodyparts, self.colormap)
+        ## moved to __init__ for the time being
+        # self.axes.callbacks.connect('xlim_changed', self.onZoom)
+        # self.axes.callbacks.connect('ylim_changed', self.onZoom)
 
-        except:
-            a = np.empty((len(self.index),2,))
-            a[:] = np.nan
-            for bodypart in self.bodyparts:
-                index = pd.MultiIndex.from_product([[self.scorer], [bodypart], ['x', 'y']],names=['scorer', 'bodyparts', 'coords'])
-                frame = pd.DataFrame(a, columns = index, index = self.relativeimagenames)
-                self.dataFrame = pd.concat([self.dataFrame, frame],axis=1)
-            self.iter = 0
+        self.choiceBox,self.rdb,self.slider,self.checkBox = self.choice_panel.addRadioButtons(self.bodyparts,self.file,self.markerSize)
+        self.buttonCounter = self.initLabels(self.dir.current)
+        ## moved to __init__ for the time being
+        # self.cidClick = self.canvas.mpl_connect('button_press_event', self.onClick)
+        # self.canvas.mpl_connect('button_release_event', self.onButtonRelease)
 
-# Reading the image name
-        self.img = self.index[self.iter]
-        img_name = Path(self.index[self.iter]).name
-        self.norm,self.colorIndex = self.image_panel.getColorIndices(self.img,self.bodyparts)
-
-# Checking for new frames and adding them to the existing dataframe
-        old_imgs = np.sort(list(self.dataFrame.index))
-        self.newimages = list(set(self.relativeimagenames) - set(old_imgs))
-        if self.newimages == []:
-            pass
-        else:
-            print("Found new frames..")
-# Create an empty dataframe with all the new images and then merge this to the existing dataframe.
-            self.df=None
-            a = np.empty((len(self.newimages),2,))
-            a[:] = np.nan
-            for bodypart in self.bodyparts:
-                index = pd.MultiIndex.from_product([[self.scorer], [bodypart], ['x', 'y']],names=['scorer', 'bodyparts', 'coords'])
-                frame = pd.DataFrame(a, columns = index, index = self.newimages)
-                self.df = pd.concat([self.df, frame],axis=1)
-            self.dataFrame = pd.concat([self.dataFrame, self.df],axis=0)
-# Sort it by the index values
-            self.dataFrame.sort_index(inplace=True)
-
-# checks for unique bodyparts
-        if len(self.bodyparts)!=len(set(self.bodyparts)):
-          print("Error - bodyparts must have unique labels! Please choose unique bodyparts in config.yaml file and try again. Quitting for now!")
-          self.Close(True)
-
-# Extracting the list of new labels
-        oldBodyParts = self.dataFrame.columns.get_level_values(1)
-        _, idx = np.unique(oldBodyParts, return_index=True)
-        oldbodyparts2plot =  list(oldBodyParts[np.sort(idx)])
-        self.new_bodyparts =  [x for x in self.bodyparts if x not in oldbodyparts2plot ]
-# Checking if user added a new label
-        if self.new_bodyparts==[]: # i.e. no new label
-            self.figure,self.axes,self.canvas,self.toolbar = self.image_panel.drawplot(self.img,img_name,self.iter,self.index,self.bodyparts,self.colormap)
-            self.axes.callbacks.connect('xlim_changed', self.onZoom)
-            self.axes.callbacks.connect('ylim_changed', self.onZoom)
-
-            self.choiceBox,self.rdb,self.slider,self.checkBox = self.choice_panel.addRadioButtons(self.bodyparts,self.file,self.markerSize)
-            self.buttonCounter = MainFrame.plot(self,self.img)
-            self.cidClick = self.canvas.mpl_connect('button_press_event', self.onClick)
-            self.canvas.mpl_connect('button_release_event', self.onButtonRelease)
-        else:
+    def checkBodyPartsConsistency(self):
+        """called from setDirectory(), to check if the set of body parts has been updated since the last labeling.
+        must be called after loading the directory."""
+        oldBodyParts = set(self.dir.dataset.columns.get_level_values(1)) # 1 for the multi-index corresponding to 'body parts'
+        newBodyParts = set(self.bodyparts) - oldBodyParts
+        if len(newBodyParts) > 0:
             dlg = wx.MessageDialog(None,"New label found in the config file. Do you want to see all the other labels?", "New label found",wx.YES_NO | wx.ICON_WARNING)
             result = dlg.ShowModal()
             if result == wx.ID_NO:
-                self.bodyparts = self.new_bodyparts
-                self.norm,self.colorIndex = self.image_panel.getColorIndices(self.img,self.bodyparts)
-            a = np.empty((len(self.index),2,))
-            a[:] = np.nan
-            for bodypart in self.new_bodyparts:
-                index = pd.MultiIndex.from_product([[self.scorer], [bodypart], ['x', 'y']],names=['scorer', 'bodyparts', 'coords'])
-                frame = pd.DataFrame(a, columns = index, index = self.relativeimagenames)
-                self.dataFrame = pd.concat([self.dataFrame, frame],axis=1)
+                self.bodyparts = list(newBodyParts)
+            # no matter showing or not showing the old set of body parts, the dataset must be extended
+            self.dir.add_bodyparts(self.bodyparts)
+        # finally
+        self.norm, self.colorIndex = self.image_panel.getColorIndices(self.dir.current, self.bodyparts)
 
-            self.figure,self.axes,self.canvas,self.toolbar = self.image_panel.drawplot(self.img,img_name,self.iter,self.index,self.bodyparts,self.colormap)
-            self.axes.callbacks.connect('xlim_changed', self.onZoom)
-            self.axes.callbacks.connect('ylim_changed', self.onZoom)
 
-            self.choiceBox,self.rdb,self.slider,self.checkBox = self.choice_panel.addRadioButtons(self.bodyparts,self.file,self.markerSize)
-            self.cidClick = self.canvas.mpl_connect('button_press_event', self.onClick)
-            self.canvas.mpl_connect('button_release_event', self.onButtonRelease)
-            self.buttonCounter = MainFrame.plot(self,self.img)
+    def updateWithConfigFile(self):
+        """update the config variables based on the config file."""
+        self.cfg          = auxiliaryfunctions.read_config(self.config_file)
+        self.scorer       = self.cfg['scorer']
+        self.bodyparts    = self.cfg['bodyparts']
+        self.videos       = self.cfg['video_sets'].keys()
+        self.markerSize   = self.cfg['dotsize']
+        self.alpha        = self.cfg['alphavalue']
+        self.colormap     = plt.get_cmap(self.cfg['colormap']).reversed()
+        self.project_path = self.cfg['project_path']
 
-        self.checkBox.Bind(wx.EVT_CHECKBOX,self.activateSlider)
-        self.slider.Bind(wx.EVT_SLIDER,self.OnSliderScroll)
+        # checks for unique bodyparts
+        if len(self.bodyparts)!=len(set(self.bodyparts)):
+            print("Error - bodyparts must have unique labels! Please choose unique bodyparts in config.yaml file and try again. Quitting for now!")
+            self.Close(True)
 
     def nextImage(self,event):
         """
@@ -557,7 +732,7 @@ class MainFrame(wx.Frame):
             self.updatedCoords = MainFrame.getLabels(self,self.iter)
             self.img = self.index[self.iter]
             img_name = Path(self.index[self.iter]).name
-            self.figure.delaxes(self.figure.axes[1]) # Removes the axes corresponding to the colorbar
+            self.image_panel.clearplot()
             self.figure,self.axes,self.canvas,self.toolbar = self.image_panel.drawplot(self.img,img_name,self.iter,
                                                                                        self.index,self.bodyparts,
                                                                                        self.colormap,
@@ -590,7 +765,7 @@ class MainFrame(wx.Frame):
         self.rdb.SetSelection(0)
         self.img = self.index[self.iter]
         img_name = Path(self.index[self.iter]).name
-        self.figure.delaxes(self.figure.axes[1]) # Removes the axes corresponding to the colorbar
+        self.image_panel.clearplot()
         self.figure,self.axes,self.canvas,self.toolbar = self.image_panel.drawplot(self.img,img_name,self.iter,
                                                                                    self.index,self.bodyparts,
                                                                                    self.colormap,
@@ -613,7 +788,7 @@ class MainFrame(wx.Frame):
             self.previous_image_points.append(image_points)
         return(self.previous_image_points)
 
-    def plot(self,img):
+    def initLabels(self,img):
         """
         Plots and call auxfun_drag class for moving and removing points.
         """

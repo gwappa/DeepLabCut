@@ -116,7 +116,7 @@ class OpenCVPicker(FramePicker):
     def iter_frames(self, crop=False, resize=False, transform_color=True):
         if self.offset != 0:
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-        while self.cap.is_open():
+        while self.cap.isOpened():
             try:
                 yield self.read(crop=crop, resize=resize, transform_color=transform_color)
             except RuntimeError:

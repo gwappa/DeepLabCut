@@ -67,13 +67,14 @@ def evaluate_network(config,Shuffles=[1],plotting = None,show_errors = True,comp
     >>> deeplabcut.evaluate_network('/analysis/project/reaching-task/config.yaml',shuffle=[1],True)
     """
     import os
-    from skimage import io
+    # from skimage import io
     import skimage.color
 
     from deeplabcut.pose_estimation_tensorflow.nnet import predict as ptf_predict
     from deeplabcut.pose_estimation_tensorflow.config import load_config
     from deeplabcut.pose_estimation_tensorflow.dataset.pose_dataset import data_to_input
     from deeplabcut.utils import auxiliaryfunctions, visualization
+    from deeplabcut.utils.imageop import imread
     import tensorflow as tf
 
     if 'TF_CUDNN_USE_AUTOTUNE' in os.environ:
@@ -98,11 +99,15 @@ def evaluate_network(config,Shuffles=[1],plotting = None,show_errors = True,comp
 
     # Loading human annotatated data
     trainingsetfolder=auxiliaryfunctions.GetTrainingSetFolder(cfg)
-    Data=pd.read_hdf(os.path.join(cfg["project_path"],str(trainingsetfolder),'CollectedData_' + cfg["scorer"] + '.h5'),'df_with_missing')
+    projectfolder = Path(cfg['project_path'])
+    datafile = projectfolder / str(trainingsetfolder) / ('CollectedData_' + cfg["scorer"] + '.h5')
+    Data=pd.read_hdf(str(datafile),'df_with_missing')
+
     # Get list of body parts to evaluate network for
     comparisonbodyparts=auxiliaryfunctions.IntersectionofBodyPartsandOnesGivenbyUser(cfg,comparisonbodyparts)
     # Make folder for evaluation
-    auxiliaryfunctions.attempttomakefolder(str(cfg["project_path"]+"/evaluation-results/"))
+    resultsfolder = projectfolder / "evaluation_results"
+    auxiliaryfunctions.attempttomakefolder(str(resultsfolder))
     for shuffle in Shuffles:
         for trainFraction in cfg["TrainingFraction"]:
             ##################################################
@@ -122,8 +127,8 @@ def evaluate_network(config,Shuffles=[1],plotting = None,show_errors = True,comp
             #change batch size, if it was edited during analysis!
             dlc_cfg['batch_size']=1 #in case this was edited for analysis.
             #Create folder structure to store results.
-            evaluationfolder=os.path.join(cfg["project_path"],str(auxiliaryfunctions.GetEvaluationFolder(trainFraction,shuffle,cfg)))
-            auxiliaryfunctions.attempttomakefolder(evaluationfolder,recursive=True)
+            evaluationfolder=projectfolder / str(auxiliaryfunctions.GetEvaluationFolder(trainFraction,shuffle,cfg))
+            auxiliaryfunctions.attempttomakefolder(str(evaluationfolder),recursive=True)
             #path_train_config = modelfolder / 'train' / 'pose_cfg.yaml'
 
             # Check which snapshots are available and sort them by # iterations
@@ -156,11 +161,16 @@ def evaluate_network(config,Shuffles=[1],plotting = None,show_errors = True,comp
                 #name for deeplabcut net (based on its parameters)
                 DLCscorer = auxiliaryfunctions.GetScorerName(cfg,shuffle,trainFraction,trainingsiterations)
                 print("Running ", DLCscorer, " with # of trainingiterations:", trainingsiterations)
-                resultsfilename=os.path.join(str(evaluationfolder),DLCscorer + '-' + Snapshots[snapindex]+  '.h5')
+                resultsfilename = evaluationfolder / (DLCscorer + '-' + Snapshots[snapindex]+  '.h5')
+
+                DataMachine = None
                 try:
-                    DataMachine = pd.read_hdf(resultsfilename,'df_with_missing')
+                    DataMachine = pd.read_hdf(str(resultsfilename),'df_with_missing')
                     print("This net has already been evaluated!")
                 except FileNotFoundError:
+                    pass
+
+                if DataMachine is None:
                     # Specifying state of model (snapshot / training state)
                     sess, inputs, outputs = ptf_predict.setup_pose_prediction(dlc_cfg)
 
@@ -168,7 +178,7 @@ def evaluate_network(config,Shuffles=[1],plotting = None,show_errors = True,comp
                     PredicteData = np.zeros((Numimages,3 * len(dlc_cfg['all_joints_names'])))
                     print("Analyzing data...")
                     for imageindex, imagename in tqdm(enumerate(Data.index)):
-                        image = io.imread(os.path.join(cfg['project_path'],imagename),mode='RGB')
+                        image = imread(os.path.join(cfg['project_path'],imagename),mode='RGB')
                         image = skimage.color.gray2rgb(image)
                         image_batch = data_to_input(image)
 
@@ -218,6 +228,7 @@ def evaluate_network(config,Shuffles=[1],plotting = None,show_errors = True,comp
 
                     TF.reset_default_graph()
                     #print(final_result)
+
             make_results_file(final_result,evaluationfolder,DLCscorer)
             print("The network is evaluated and the results are stored in the subdirectory 'evaluation_results'.")
             print("If it generalizes well, choose the best model for prediction and update the config file with the appropriate index for the 'snapshotindex'.\nUse the function 'analyze_video' to make predictions on new videos.")

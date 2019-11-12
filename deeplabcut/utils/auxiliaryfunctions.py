@@ -252,7 +252,9 @@ def SaveData(PredicteData, metadata, dataname, pdindex, imagenames,save_as_csv):
 
 def LoadVideoMetadata(dataname):
     ''' Load meta data from analyzed video, created by predict_videos.py '''
-    with open(dataname.split('.h5')[0] + 'includingmetadata.pickle', 'rb') as f: #same as in SaveData!
+    dataname = Path(dataname)
+    filename = dataname.stem + '_includingmetadata.pickle'
+    with open(dataname.with_name(filename), 'rb') as f: #same as in SaveData!
         metadata= pickle.load(f)
         return metadata
 

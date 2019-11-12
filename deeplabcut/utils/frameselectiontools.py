@@ -59,7 +59,7 @@ def uniform_frame_selection(picker, numframes2pick, start=0, stop=1, subindices=
 
 def kmeans_based_frame_selection(picker, numframes2pick, start=0, stop=1,
                                 subindices=None, step=1, resizewidth=30,
-                                batchsize=100, max_iter=50):
+                                batchsize=100, max_iter=50, use_color_images=False):
     ''' This code downsamples the video to a width of resizewidth.
 
     The video is extracted as a numpy array, which is then clustered with kmeans, whereby each frames is treated as a vector.
@@ -92,7 +92,7 @@ def kmeans_based_frame_selection(picker, numframes2pick, start=0, stop=1,
         picker.set_resize(resizewidth)
         DATA = None
         for counter, index in tqdm(enumerate(subindices)):
-            image = picker.pick_single(index, crop=True, resize=True, transform_color=False) #color trafo not necessary; lack thereof improves speed.
+            image = picker.pick_single(index, crop=True, resize=True, transform_color=use_color_images) #color trafo not necessary; lack thereof improves speed.
             if picker.is_colored:
                 image = np.concatenate([image[0], image[1], image[2]], axis=1)
             elif picker.ncolors == 1:

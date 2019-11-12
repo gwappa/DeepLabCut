@@ -346,9 +346,9 @@ def create_labeled_video(config,videos,videotype='avi',shuffle=1,trainingsetinde
     Videos=auxiliaryfunctions.Getlistofvideos(videos,videotype)
     for video in Videos:
         if destfolder is None:
-            videofolder= video.parents[0] # where your folder with videos is.
+            videofolder = video.parents[0] # where your folder with videos is.
         else:
-            videofolder=destfolder
+            videofolder = Path(destfolder)
 
         videotype = video.suffix
         print(f"Output directory: {videofolder}")

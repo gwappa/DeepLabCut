@@ -41,6 +41,12 @@ from skimage.draw import circle_perimeter, circle, line,line_aa
 
 from deeplabcut.utils.video_processor import VideoProcessorCV as vp # used to CreateVideo
 
+DEBUG_KS = True
+
+def ksdebug(msg):
+    if DEBUG_KS is True:
+        print(f"... {msg}")
+
 def get_cmap(n, name='hsv'):
     '''Returns a function that maps each index in 0, 1, ..., n-1 to a distinct
     RGB color; the keyword argument name must be a standard mpl colormap name.'''
@@ -336,9 +342,12 @@ def create_labeled_video(config,videos,videotype='avi',shuffle=1,trainingsetinde
     --------
 
     """
+    ksdebug("create_labeled_video")
     cfg = auxiliaryfunctions.read_config(config)
     trainFraction = cfg['TrainingFraction'][trainingsetindex]
     DLCscorer,DLCscorerlegacy = auxiliaryfunctions.GetScorerName(cfg,shuffle,trainFraction) #automatically loads corresponding model (even training iteration based on snapshot index)
+    ksdebug(f"scorer: {DLCscorer}")
+    ksdebug(f"legacy: {DLCscorerlegacy}")
 
     bodyparts=auxiliaryfunctions.IntersectionofBodyPartsandOnesGivenbyUser(cfg,displayedbodyparts)
     if draw_skeleton:
@@ -349,51 +358,58 @@ def create_labeled_video(config,videos,videotype='avi',shuffle=1,trainingsetinde
         skeleton_color = None
 
     Videos=auxiliaryfunctions.Getlistofvideos(videos,videotype)
+    ksdebug(f"videos: {Videos}")
     for video in Videos:
+        video = Path(video)
         if destfolder is None:
-            videofolder= Path(video).parents[0] #where your folder with videos is.
+            videofolder= video.parents[0] #where your folder with videos is.
         else:
-            videofolder=destfolder
+            videofolder = Path(destfolder)
 
-        os.chdir(str(videofolder))
-        videotype = Path(video).suffix
-        print("Starting % ", videofolder, videos)
-        vname = str(Path(video).stem)
-
+        videotype = video.suffix
+        vname = str(video.stem)
+        print(f"Reading: '{video.name}' (in: '{str(video.parent)}', name='{vname}', type='{videotype}')")
 
         #if notanalyzed:
         #notanalyzed,outdataname,sourcedataname,DLCscorer=auxiliaryfunctions.CheckifPostProcessing(folder,vname,DLCscorer,DLCscorerlegacy,suffix='checking')
 
         if filtered==True:
-            videooutname1=os.path.join(vname + DLCscorer+'filtered_labeled.mp4')
-            videooutname2=os.path.join(vname + DLCscorerlegacy+'filtered_labeled.mp4')
+            video_out1 = videofolder / (vname + DLCscorer+'filtered_labeled.mp4')
+            video_out2 = videofolder / (vname + DLCscorerlegacy+'filtered_labeled.mp4')
         else:
-            videooutname1=os.path.join(vname + DLCscorer+'_labeled.mp4')
-            videooutname2=os.path.join(vname + DLCscorerlegacy+'_labeled.mp4')
+            video_out1 = videofolder / (vname + DLCscorer+'_labeled.mp4')
+            video_out2 = videofolder / (vname + DLCscorerlegacy+'_labeled.mp4')
 
-        if os.path.isfile(videooutname1) or os.path.isfile(videooutname2):
-            print("Labeled video already created.")
+        ksdebug(f"looking for: '{video_out1}', '{video_out2}'...")
+        if video_out1.is_file() or video_out2.is_file():
+            print("***Skipping: labeled video seems to be already created.")
         else:
             print("Loading ", video, "and data.")
             datafound,metadata,Dataframe,DLCscorer,suffix=auxiliaryfunctions.LoadAnalyzedData(str(videofolder),vname,DLCscorer,filtered) #returns boolean variable if data was found and metadata + pandas array
-            videooutname=os.path.join(vname + DLCscorer+suffix+'_labeled.mp4')
-            if datafound and not os.path.isfile(videooutname): #checking again, for this loader video could exist
+            ksdebug(f"datafound={datafound}: DLCscorer='{DLCscorer}', suffix='{suffix}'")
+
+            video_out = videofolder / (vname + DLCscorer + suffix + '_labeled.mp4')
+            if datafound is False:
+                print(f"***Skippking: analyzed data not found for video: {vname}")
+            elif not video_out.exists(): #checking again, for this loader video could exist
                 #Loading cropping data used during analysis
                 cropping=metadata['data']["cropping"]
                 [x1,x2,y1,y2]=metadata['data']["cropping_parameters"]
                 if save_frames==True:
-                    tmpfolder = os.path.join(str(videofolder),'temp-' + vname)
-                    auxiliaryfunctions.attempttomakefolder(tmpfolder)
-                    clip = vp(video)
+                    tmpfolder = videofolder / ('temp-' + vname)
+                    auxiliaryfunctions.attempttomakefolder(str(tmpfolder))
+                    clip = vp(str(video))
 
-                    CreateVideoSlow(videooutname,clip,Dataframe,tmpfolder,cfg["dotsize"],cfg["colormap"],cfg["alphavalue"],cfg["pcutoff"],trailpoints,cropping,x1,x2,y1,y2,delete,DLCscorer,bodyparts,outputframerate,Frames2plot,bodyparts2connect,skeleton_color,draw_skeleton,displaycropped)
+                    CreateVideoSlow(str(video_out),clip,Dataframe,tmpfolder,cfg["dotsize"],cfg["colormap"],cfg["alphavalue"],cfg["pcutoff"],trailpoints,cropping,x1,x2,y1,y2,delete,DLCscorer,bodyparts,outputframerate,Frames2plot,bodyparts2connect,skeleton_color,draw_skeleton,displaycropped)
                 else:
                     if displaycropped: #then the cropped video + the labels is depicted
-                        clip = vp(fname = video,sname = videooutname,codec=codec,sw=x2-x1,sh=y2-y1)
+                        clip = vp(fname = str(video),sname = str(video_out),codec=codec,sw=x2-x1,sh=y2-y1)
                         CreateVideo(clip,Dataframe,cfg["pcutoff"],cfg["dotsize"],cfg["colormap"],DLCscorer,bodyparts,trailpoints,cropping,x1,x2,y1,y2,bodyparts2connect,skeleton_color,draw_skeleton,displaycropped)
                     else: #then the full video + the (perhaps in cropped mode analyzed labels) are depicted
-                        clip = vp(fname = video,sname = videooutname,codec=codec)
+                        clip = vp(fname = str(video),sname = str(video_out),codec=codec)
                         CreateVideo(clip,Dataframe,cfg["pcutoff"],cfg["dotsize"],cfg["colormap"],DLCscorer,bodyparts,trailpoints,cropping,x1,x2,y1,y2,bodyparts2connect,skeleton_color,draw_skeleton,displaycropped)
+            else:
+                print(f"***Skipping: video seems to exist: {video_out}")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

@@ -17,6 +17,16 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import cv2
 
+DEBUG_KS = False
+
+def ksdebug(msg):
+    if DEBUG_KS is True:
+        print(f"... {msg}")
+
+def kstrace():
+    if DEBUG_KS is True:
+        import traceback as tb
+        tb.print_exc()
 
 def create_config_template():
     """
@@ -412,41 +422,69 @@ def CheckifNotEvaluated(folder,DLCscorer,DLCscorerlegacy,snapshot):
             return True, dataname,DLCscorer
 
 def LoadAnalyzedData(videofolder,vname,DLCscorer,filtered):
+    videofolder = Path(videofolder)
     if filtered==True:
-        try:
-            fn=os.path.join(videofolder,vname + DLCscorer + 'filtered.h5')
-            Dataframe = pd.read_hdf(fn)
-            metadata=LoadVideoMetadata(os.path.join(videofolder,vname + DLCscorer + '.h5'))
-            datafound=True
-            suffix='_filtered.'
-            return datafound,metadata,Dataframe, DLCscorer,suffix
-        except FileNotFoundError:
-            print("No filtered predictions found, using frame-by-frame output instead.")
-            fn=os.path.join(videofolder,vname + DLCscorer + '.h5')
-            suffix=''
+        h5file = videofolder / (vname + DLCscorer + 'filtered.h5')
+        if not h5file.exists():
+            print("***No filtered predictions found, using frame-by-frame output instead.")
+        else:
+            try:
+                Dataframe = pd.read_hdf(str(h5file))
+                metadata=LoadVideoMetadata(os.path.join(videofolder,vname + DLCscorer + '.h5'))
+                datafound=True
+                suffix='_filtered.'
+                return datafound,metadata,Dataframe, DLCscorer,suffix
+            except:
+                print("***The existing filtered HDF file seems invalid; using frame-by-frame output instead.")
+                fn=os.path.join(videofolder,vname + DLCscorer + '.h5')
+                suffix=''
+
+    # finding filtered dataset failed, OR filtered was set to False
+    h5file = videofolder / (vname + DLCscorer + '.h5')
+    suffix=''
+
+    ksdebug(f"looking for analyzed data: '{h5file.name}'")
+    if h5file.exists():
+        try: #TODO: Check if DLCscorer is correct? (based on lookup in pickle?)
+            print(f"Reading from '{h5file.name}'...")
+            Dataframe = pd.read_hdf(str(h5file))
+            metadata  = LoadVideoMetadata(str(h5file))
+            datafound = True
+            return datafound, metadata, Dataframe, DLCscorer,suffix
+
+        except:
+            kstrace()
+            print("***The existing HDF file seems invalid; now looking for another data file.")
     else:
-        fn=os.path.join(videofolder,vname + DLCscorer + '.h5')
-        suffix=''
-    try: #TODO: Check if DLCscorer is correct? (based on lookup in pickle?)
-        Dataframe = pd.read_hdf(fn)
-        metadata=LoadVideoMetadata(fn)
-        datafound=True
-    except FileNotFoundError:
-        datanames=[fn for fn in os.listdir(os.curdir) if (vname in fn) and (".h5" in fn) and ("resnet" in fn or "mobilenet" in fn)]
-        if len(datanames)==0:
-            print("The video was not analyzed with this scorer:", DLCscorer)
-            print("No other scorers were found, please use the function 'analyze_videos' first.")
+        print("The video was not analyzed with this scorer:", DLCscorer)
+
+    ksdebug("now looking for ANY analyzed data...")
+    def is_analyzed_data(path):
+        fn = path.name
+        return (vname in fn) and (".h5" in fn) and ("resnet" in fn or "mobilenet" in fn)
+    candidates = [path for path in videofolder.iterdir() if is_analyzed_data(path)]
+    if len(candidates)==0:
+        print("No other scorers were found, please use the function 'analyze_videos' first.")
+        datafound=False
+        metadata,Dataframe=[],[]
+    else:
+        datafile = candidates[0]
+        dataname = datafile.name
+        print("Other scorers were found, however:", [cand.stem for cand in candidates])
+        if 'DeepCut_resnet' in dataname: # try the legacy scorer name instead!
+            DLCscorer='DeepCut'+(dataname.split('DeepCut')[1]).split('.h5')[0]
+        else:
+            DLCscorer='DLC_'+(dataname.split('DLC_')[1]).split('.h5')[0]
+        print(f"Reading from '{h5file.name}'...")
+        try:
+            Dataframe = pd.read_hdf(str(datafile))
+            metadata=LoadVideoMetadata(str(datafile))
+            datafound=True
+            print("Creating output for:", DLCscorer," instead.")
+            return datafound, metadata, Dataframe, DLCscorer,suffix
+        except:
+            kstrace()
+            print(f"***The HDF file seems to be invalid.")
             datafound=False
             metadata,Dataframe=[],[]
-        elif len(datanames)>0:
-            print("The video was not analyzed with this scorer:", DLCscorer)
-            print("Other scorers were found, however:", datanames)
-            if 'DeepCut_resnet' in datanames[0]: # try the legacy scorer name instead!
-                DLCscorer='DeepCut'+(datanames[0].split('DeepCut')[1]).split('.h5')[0]
-            else:
-                DLCscorer='DLC_'+(datanames[0].split('DLC_')[1]).split('.h5')[0]
-            print("Creating output for:", DLCscorer," instead.")
-            Dataframe = pd.read_hdf(datanames[0])
-            metadata=LoadVideoMetadata(datanames[0])
-            datafound=True
     return datafound, metadata, Dataframe, DLCscorer,suffix

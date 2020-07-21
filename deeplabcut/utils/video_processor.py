@@ -199,7 +199,7 @@ class GenericVideoProcessor(VideoProcessor):
 
     def _read_frame(self):
         if self._it is None:
-            self._it = iter(self.vid.iter_frames())
+            self._it = iter(self.vid.iter_frames(assert_color=True))
         return np.array(next(self._it), copy=True)
 
     def save_frame(self, frame):

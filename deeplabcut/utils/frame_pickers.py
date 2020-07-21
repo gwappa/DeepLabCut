@@ -42,16 +42,20 @@ class FramePicker(object):
     def close(self):
         raise NotImplementedError()
 
-    def condition_image_impl(self, img, crop=False, resize=False, transform_color=False):
+    def condition_image_impl(self, img, crop=False, resize=False, transform_color=False, assert_color=False):
         if (crop == True) and (self.crop is not None):
             img = img[int(self.crop[2]):int(self.crop[3]),int(self.crop[0]):int(self.crop[1])]
         if (resize == True) and (self.resize is not None):
             img = cv2.resize(img, None, fx=self.resize, fy=self.resize,
                              interpolation=cv2.INTER_NEAREST)
+        if assert_color == True:
+            if img.ndim == 2:
+                img = np.stack([img, img, img], axis=-1)
         if transform_color == True:
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        return img
 
-    def iter_frames(self, crop=False, resize=False, transform_color=True):
+    def iter_frames(self, crop=False, resize=False, transform_color=True, assert_color=False):
         raise NotImplementedError()
 
     def get_ncolorchannels(self):
@@ -300,6 +304,7 @@ class NumpyPicker(FramePicker):
         loaded = np.load(str(path))
         try:
             self._data = loaded["frames"]
+            dt = np.diff(loaded["timestamps"]).mean()
         except:
             self._data = loaded
         self.nframes, self.height, self.width = self._data.shape[:3]
@@ -307,15 +312,16 @@ class NumpyPicker(FramePicker):
             self.nchan = self._data.shape[3]
         else:
             self.nchan = 1
-        self.fps = 1 # FIXME
-        self.duration = self.nframes # FIXME
+        self.dt  = dt
+        self.fps = 1 / dt
+        self.duration = self.nframes * self.dt
 
     def close(self):
         pass
 
-    def iter_frames(self, crop=False, resize=False, transform_color=False):
+    def iter_frames(self, crop=False, resize=False, transform_color=False, assert_color=False):
         for i in range(self.nframes):
-            yield self.pick_single(i, crop, resize, transform_color)
+            yield self.pick_single(i, crop, resize, transform_color, assert_color)
 
     def get_ncolorchannels(self):
         ndim  = self._data.ndim
@@ -330,9 +336,18 @@ class NumpyPicker(FramePicker):
     def set_resize(self, resizewidth):
         self._resizewidth = resizewidth
 
-    def pick_single(self, index, crop=False, resize=False, transform_color=False):
+    def pick_single(self, index,
+                    crop=False,
+                    resize=False,
+                    transform_color=False,
+                    assert_color=False):
         # TODO: no need to use img_as_ubyte?
-        return self.condition_image_impl(self._data[index], crop, resize, transform_color=False)
+        img = self.img_as_ubyte(self._data[index])
+        return self.condition_image_impl(img,
+                                         crop,
+                                         resize,
+                                         transform_color=False,
+                                         assert_color=assert_color)
 
     def pick_at_fraction(self, frac):
         index = int(self.nframes * frac)

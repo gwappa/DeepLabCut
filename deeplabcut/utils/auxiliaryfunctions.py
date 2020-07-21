@@ -419,23 +419,24 @@ def CheckifPostProcessing(folder,vname,DLCscorer,DLCscorerlegacy,suffix='filtere
 
 
 def CheckifNotAnalyzed(destfolder,vname,DLCscorer,DLCscorerlegacy,flag='video'):
-    dataname = os.path.join(destfolder,vname + DLCscorer + '.h5')
-    if os.path.isfile(dataname):
+    destfolder = Path(destfolder)
+    datafile   = destfolder / f"{vname}{DLCscorer}.h5"
+    if datafile.is_file():
         if flag=='video':
-            print("Video already analyzed!", dataname)
+            print(f"Video already analyzed: {datafile.name}")
         elif flag=='framestack':
-            print("Frames already analyzed!", dataname)
-        return False, dataname, DLCscorer
+            print(f"Frames already analyzed: {datafile.name}")
+        return False, str(datafile), DLCscorer
     else:
-        dn = os.path.join(destfolder,vname + DLCscorerlegacy + '.h5')
-        if os.path.isfile(dn):
+        legacy = destfolder / f"{vname}{DLCscorerlegacy}.h5"
+        if legacy.is_file():
             if flag=='video':
-                print("Video already analyzed (with DLC<2.1)!", dn)
+                print(f"Video already analyzed (with DLC<2.1): {legacy.name}")
             elif flag=='framestack':
-                print("Frames already analyzed (with DLC<2.1)!", dn)
-            return False, dn, DLCscorerlegacy
+                print(f"Frames already analyzed (with DLC<2.1): {legacy.name}")
+            return False, str(legacy), DLCscorerlegacy
         else:
-            return True, dataname, DLCscorer
+            return True, str(datafile), DLCscorer
 
 def CheckifNotEvaluated(folder,DLCscorer,DLCscorerlegacy,snapshot):
     dataname=os.path.join(folder,DLCscorer + '-' + str(snapshot)+  '.h5')

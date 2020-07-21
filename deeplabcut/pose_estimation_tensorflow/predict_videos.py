@@ -16,6 +16,7 @@ import os.path
 from deeplabcut.pose_estimation_tensorflow.nnet import predict
 from deeplabcut.pose_estimation_tensorflow.config import load_config
 from deeplabcut.pose_estimation_tensorflow.dataset.pose_dataset import data_to_input
+from deeplabcut.utils import frame_pickers
 import time
 import pandas as pd
 import numpy as np
@@ -32,7 +33,7 @@ from skimage.util import img_as_ubyte
 # Loading data, and defining model folder
 ####################################################
 
-def analyze_videos(config, videos, videotype='avi', shuffle=1, trainingsetindex=0, gputouse=None, save_as_csv=False,
+def analyze_videos(config, videos, videotype='avi', driver="opencv", shuffle=1, trainingsetindex=0, gputouse=None, save_as_csv=False,
                    destfolder=None, batchsize=None, crop=None, get_nframesfrommetadata=True, TFGPUinference=True,
                    dynamic=(False, .5, 10)):
     """
@@ -199,7 +200,7 @@ def analyze_videos(config, videos, videotype='avi', shuffle=1, trainingsetindex=
     else:
         xyz_labs = ['x', 'y', 'likelihood']
 
-    #sess, inputs, outputs = predict.setup_pose_prediction(dlc_cfg)
+    # sess, inputs, outputs = predict.setup_pose_prediction(dlc_cfg)
     if TFGPUinference:
         sess, inputs, outputs = predict.setup_GPUpose_prediction(dlc_cfg)
     else:
@@ -217,14 +218,14 @@ def analyze_videos(config, videos, videotype='avi', shuffle=1, trainingsetindex=
     if len(Videos)>0:
         #looping over videos
         for video in Videos:
-            DLCscorer=AnalyzeVideo(video,DLCscorer,DLCscorerlegacy,trainFraction,cfg,dlc_cfg,sess,inputs, outputs,pdindex,save_as_csv, destfolder,TFGPUinference,dynamic)
+            DLCscorer=AnalyzeVideo(video,DLCscorer,DLCscorerlegacy,trainFraction,cfg,dlc_cfg,sess,inputs, outputs,pdindex,save_as_csv, destfolder,TFGPUinference,dynamic,driver=driver)
 
-        os.chdir(str(start_path))
+        # os.chdir(str(start_path)) # KS200721
         print("The videos are analyzed. Now your research can truly start! \n You can create labeled videos with 'create_labeled_video'.")
         print("If the tracking is not satisfactory for some videos, consider expanding the training set. You can use the function 'extract_outlier_frames' to extract any outlier frames!")
         return DLCscorer #note: this is either DLCscorer or DLCscorerlegacy depending on what was used!
     else:
-        os.chdir(str(start_path))
+        # os.chdir(str(start_path)) # KS200721
         print("No video/s found. Please check your path!")
         return DLCscorer
 
@@ -242,8 +243,10 @@ def checkcropping(cfg,cap):
         raise Exception('Please check the boundary of cropping!')
     return int(ny),int(nx)
 
-def GetPoseF(cfg,dlc_cfg, sess, inputs, outputs,cap,nframes,batchsize):
+def GetPoseF(cfg,dlc_cfg, sess, inputs, outputs,picker,batchsize):
     ''' Batchwise prediction of pose '''
+    nframes       = picker.nframes
+    raise NotImplementedError() # FIXME: KS200721 dirty workaround
     PredictedData = np.zeros((nframes, dlc_cfg['num_outputs'] * 3 * len(dlc_cfg['all_joints_names'])))
     batch_ind = 0 # keeps track of which image within a batch should be written to
     batch_num = 0 # keeps track of which batch you are at
@@ -285,11 +288,13 @@ def GetPoseF(cfg,dlc_cfg, sess, inputs, outputs,cap,nframes,batchsize):
     pbar.close()
     return PredictedData,nframes
 
-def GetPoseS(cfg,dlc_cfg, sess, inputs, outputs,cap,nframes):
+def GetPoseS(cfg,dlc_cfg, sess, inputs, outputs, picker):
     ''' Non batch wise pose estimation for video cap.'''
     if cfg['cropping']:
         ny,nx=checkcropping(cfg,cap)
 
+    nframes       = picker.nframes
+    raise NotImplementedError() # FIXME: KS200721 dirty workaround
     PredictedData = np.zeros((nframes, dlc_cfg['num_outputs'] * 3 * len(dlc_cfg['all_joints_names'])))
     pbar=tqdm(total=nframes)
     counter=0
@@ -315,42 +320,38 @@ def GetPoseS(cfg,dlc_cfg, sess, inputs, outputs,cap,nframes):
     pbar.close()
     return PredictedData,nframes
 
-def GetPoseS_GTF(cfg,dlc_cfg, sess, inputs, outputs,cap,nframes):
+def GetPoseS_GTF(cfg,dlc_cfg, sess, inputs, outputs, picker):
     ''' Non batch wise pose estimation for video cap.'''
     if cfg['cropping']:
         ny,nx=checkcropping(cfg,cap)
+        picker.set_crop(cfg['x1'], cfg['x2'], cfg['y1'], cfg['y2'])
 
+    nframes     = picker.nframes
     pose_tensor = predict.extract_GPUprediction(outputs, dlc_cfg) #extract_output_tensor(outputs, dlc_cfg)
     PredictedData = np.zeros((nframes, 3 * len(dlc_cfg['all_joints_names'])))
     pbar=tqdm(total=nframes)
     counter=0
     step=max(10,int(nframes/100))
-    while(cap.isOpened()):
-            if counter%step==0:
-                pbar.update(step)
 
-            ret, frame = cap.read()
-            if ret:
-                frame=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                if cfg['cropping']:
-                    frame= img_as_ubyte(frame[cfg['y1']:cfg['y2'],cfg['x1']:cfg['x2']])
-                else:
-                    frame = img_as_ubyte(frame)
+    for frame in picker.iter_frames(crop=cfg["cropping"],
+                                    transform_color=True,
+                                    assert_color=True): # FIXME: KS200721: it may depend
+        if counter%step==0:
+            pbar.update(step)
 
-                pose = sess.run(pose_tensor, feed_dict={inputs: np.expand_dims(frame, axis=0).astype(float)})
-                pose[:, [0,1,2]] = pose[:, [1,0,2]]
-                #pose = predict.getpose(frame, dlc_cfg, sess, inputs, outputs)
-                PredictedData[counter, :] = pose.flatten()  # NOTE: thereby cfg['all_joints_names'] should be same order as bodyparts!
-            else:
-                nframes=counter
-                break
-            counter+=1
+        pose = sess.run(pose_tensor, feed_dict={inputs: np.expand_dims(frame, axis=0).astype(float)})
+        pose[:, [0,1,2]] = pose[:, [1,0,2]]
+        # pose = predict.getpose(frame, dlc_cfg, sess, inputs, outputs)
+        PredictedData[counter, :] = pose.flatten()  # NOTE: thereby cfg['all_joints_names'] should be same order as bodyparts!
+
+        counter+=1
 
     pbar.close()
-    return PredictedData,nframes
+    return PredictedData,counter
 
-def GetPoseF_GTF(cfg,dlc_cfg, sess, inputs, outputs,cap,nframes,batchsize):
+def GetPoseF_GTF(cfg,dlc_cfg, sess, inputs, outputs,picker,batchsize):
     ''' Batchwise prediction of pose '''
+    nframes = picker.nframes
     PredictedData = np.zeros((nframes, 3 * len(dlc_cfg['all_joints_names'])))
     batch_ind = 0 # keeps track of which image within a batch should be written to
     batch_num = 0 # keeps track of which batch you are at
@@ -358,6 +359,7 @@ def GetPoseF_GTF(cfg,dlc_cfg, sess, inputs, outputs,cap,nframes,batchsize):
     if cfg['cropping']:
         ny,nx=checkcropping(cfg,cap)
 
+    raise NotImplementedError() # FIXME: KS200721 dirty workaround
     pose_tensor = predict.extract_GPUprediction(outputs, dlc_cfg) #extract_output_tensor(outputs, dlc_cfg)
     frames = np.empty((batchsize, ny, nx, 3), dtype='ubyte') # this keeps all frames in a batch
     pbar=tqdm(total=nframes)
@@ -408,14 +410,16 @@ def getboundingbox(x,y,nx,ny,margin):
     y2=min([ny,int(np.amax(y))+margin])
     return x1,x2,y1,y2
 
-def GetPoseDynamic(cfg,dlc_cfg, sess, inputs, outputs,cap,nframes,detectiontreshold,margin):
+def GetPoseDynamic(cfg,dlc_cfg, sess, inputs, outputs, picker, detectiontreshold,margin):
     ''' Non batch wise pose estimation for video cap by dynamically cropping around previously detected parts.'''
     if cfg['cropping']:
         ny,nx=checkcropping(cfg,cap)
     else:
         ny,nx=(int(cap.get(4)),int(cap.get(3)))
     x1,x2,y1,y2=0,nx,0,ny
+    nframes  = picker.nframes
     detected = False
+    raise NotImplementedError()
     #TODO: perform detection on resized image (For speed)
 
     PredictedData = np.zeros((nframes, 3 * len(dlc_cfg['all_joints_names'])))
@@ -464,75 +468,67 @@ def GetPoseDynamic(cfg,dlc_cfg, sess, inputs, outputs,cap,nframes,detectiontresh
     pbar.close()
     return PredictedData,nframes
 
-def AnalyzeVideo(video,DLCscorer,DLCscorerlegacy,trainFraction,cfg,dlc_cfg,sess,inputs, outputs,pdindex,save_as_csv, destfolder=None,TFGPUinference=True,dynamic=(False,.5,10)):
+def AnalyzeVideo(video,DLCscorer,DLCscorerlegacy,trainFraction,cfg,dlc_cfg,sess,inputs, outputs,pdindex,save_as_csv, destfolder=None,TFGPUinference=True,dynamic=(False,.5,10), driver="opencv"):
     ''' Helper function for analyzing a video. '''
-    print("Starting to analyze % ", video)
-    vname = Path(video).stem
+
+    video = Path(video)
+    print(f"Starting to analyze: {video}")
+    vname = video.stem
     if destfolder is None:
-        destfolder = str(Path(video).parents[0])
+        destfolder = video.parent
 
-    notanalyzed,dataname, DLCscorer=auxiliaryfunctions.CheckifNotAnalyzed(destfolder,vname,DLCscorer,DLCscorerlegacy)
-    if notanalyzed:
-        print("Loading ", video)
-        cap=cv2.VideoCapture(video)
-        if not cap.isOpened():
-            raise IOError('Video could not be opened. Please check that the the file integrity.')
-        fps = cap.get(5) #https://docs.opencv.org/2.4/modules/highgui/doc/reading_and_writing_images_and_video.html#videocapture-get
-        nframes = int(cap.get(7))
-        duration=nframes*1./fps
-        size=(int(cap.get(4)),int(cap.get(3)))
-
-        ny,nx=size
-        print("Duration of video [s]: ", round(duration,2), ", recorded with ", round(fps,2),"fps!")
-        print("Overall # of frames: ", nframes," found with (before cropping) frame dimensions: ", nx,ny)
-
-        dynamic_analysis_state,detectiontreshold,margin=dynamic
-        start = time.time()
-        print("Starting to extract posture")
-        if dynamic_analysis_state:
-            PredictedData,nframes=GetPoseDynamic(cfg,dlc_cfg, sess, inputs, outputs,cap,nframes,detectiontreshold,margin)
-            #GetPoseF_GTF(cfg,dlc_cfg, sess, inputs, outputs,cap,nframes,int(dlc_cfg["batch_size"]))
-        else:
-            if int(dlc_cfg["batch_size"])>1:
-                if TFGPUinference:
-                    PredictedData,nframes=GetPoseF_GTF(cfg,dlc_cfg, sess, inputs, outputs,cap,nframes,int(dlc_cfg["batch_size"]))
-                else:
-                    PredictedData,nframes=GetPoseF(cfg,dlc_cfg, sess, inputs, outputs,cap,nframes,int(dlc_cfg["batch_size"]))
-            else:
-                if TFGPUinference:
-                    PredictedData,nframes=GetPoseS_GTF(cfg,dlc_cfg, sess, inputs, outputs,cap,nframes)
-                else:
-                    PredictedData,nframes=GetPoseS(cfg,dlc_cfg, sess, inputs, outputs,cap,nframes)
-
-        stop = time.time()
-        if cfg['cropping']==True:
-            coords=[cfg['x1'],cfg['x2'],cfg['y1'],cfg['y2']]
-        else:
-            coords=[0, nx, 0, ny]
-
-        dictionary = {
-            "start": start,
-            "stop": stop,
-            "run_duration": stop - start,
-            "Scorer": DLCscorer,
-            "DLC-model-config file": dlc_cfg,
-            "fps": fps,
-            "batch_size": dlc_cfg["batch_size"],
-            "frame_dimensions": (ny, nx),
-            "nframes": nframes,
-            "iteration (active-learning)": cfg["iteration"],
-            "training set fraction": trainFraction,
-            "cropping": cfg['cropping'],
-            "cropping_parameters": coords
-            #"gpu_info": device_lib.list_local_devices()
-        }
-        metadata = {'data': dictionary}
-
-        print("Saving results in %s..." %(Path(video).parents[0]))
-        auxiliaryfunctions.SaveData(PredictedData[:nframes,:], metadata, dataname, pdindex, range(nframes),save_as_csv)
+    notanalyzed, dataname, DLCscorer=auxiliaryfunctions.CheckifNotAnalyzed(str(destfolder), vname, DLCscorer, DLCscorerlegacy)
+    if notanalyzed == False:
         return DLCscorer
+
+    picker = frame_pickers.get_frame_picker(video, driver=driver)
+    print("Duration of video [s]: ", round(picker.duration,2), ", recorded with ", round(picker.fps,2),"fps!")
+    print("Overall # of frames: ", picker.nframes," found with (before cropping) frame dimensions: ", picker.width, picker.height)
+    if cfg['cropping']==True:
+        coords=[cfg['x1'],cfg['x2'],cfg['y1'],cfg['y2']]
     else:
-        return DLCscorer
+        coords=[0, picker.width, 0, picker.height]
+
+    dynamic_analysis_state, detectiontreshold, margin=dynamic
+    start = time.time()
+    print("Starting to extract posture")
+    if dynamic_analysis_state:
+        PredictedData,nframes=GetPoseDynamic(cfg,dlc_cfg, sess, inputs, outputs, picker, detectiontreshold,margin)
+    else:
+        if int(dlc_cfg["batch_size"])>1:
+            if TFGPUinference:
+                PredictedData,nframes=GetPoseF_GTF(cfg,dlc_cfg, sess, inputs, outputs, picker ,int(dlc_cfg["batch_size"]))
+            else:
+                PredictedData,nframes=GetPoseF(cfg,dlc_cfg, sess, inputs, outputs, picker ,int(dlc_cfg["batch_size"]))
+        else:
+            if TFGPUinference:
+                PredictedData,nframes=GetPoseS_GTF(cfg,dlc_cfg, sess, inputs, outputs, picker)
+            else:
+                PredictedData,nframes=GetPoseS(cfg,dlc_cfg, sess, inputs, outputs, picker)
+
+    stop = time.time()
+
+    dictionary = {
+        "start": start,
+        "stop": stop,
+        "run_duration": stop - start,
+        "Scorer": DLCscorer,
+        "DLC-model-config file": dlc_cfg,
+        "fps": picker.fps,
+        "batch_size": dlc_cfg["batch_size"],
+        "frame_dimensions": (picker.height, picker.width),
+        "nframes": picker.nframes,
+        "iteration (active-learning)": cfg["iteration"],
+        "training set fraction": trainFraction,
+        "cropping": cfg['cropping'],
+        "cropping_parameters": coords
+        #"gpu_info": device_lib.list_local_devices()
+    }
+    metadata = {'data': dictionary}
+
+    print(f"Saving results in: {destfolder}")
+    auxiliaryfunctions.SaveData(PredictedData[:nframes,:], metadata, dataname, pdindex, range(nframes),save_as_csv)
+    return DLCscorer
 
 def GetPosesofFrames(cfg,dlc_cfg, sess, inputs, outputs,directory,framelist,nframes,batchsize,rgb):
     ''' Batchwise prediction of pose for frame list in directory'''

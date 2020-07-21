@@ -8,42 +8,42 @@ https://github.com/AlexEMG/DeepLabCut/blob/master/AUTHORS
 Licensed under GNU Lesser General Public License v3.0
 """
 
-#
-# def select_cropping_area(config, videos=None):
-#     """
-#     Interactively select the cropping area of all videos in the config.
-#     A user interface pops up with a frame to select the cropping parameters.
-#     Use the left click to draw a box and hit the button 'set cropping parameters'
-#     to store the cropping parameters for a video in the config.yaml file.
-#
-#     Parameters
-#     ----------
-#     config : string
-#         Full path of the config.yaml file as a string.
-#
-#     videos : optional (default=None)
-#         List of videos whose cropping areas are to be defined. Note that full paths are required.
-#         By default, all videos in the config are successively loaded.
-#
-#     Returns
-#     -------
-#     cfg : dict
-#         Updated project configuration
-#     """
-#     from deeplabcut.utils import auxiliaryfunctions, auxfun_videos
-#
-#     cfg = auxiliaryfunctions.read_config(config)
-#     if videos is None:
-#         videos = cfg['video_sets']
-#
-#     for video in videos:
-#         coords = auxfun_videos.draw_bbox(video)
-#         if coords:
-#             cfg['video_sets'][video] = {
-#                 'crop': ', '.join(map(str, [int(coords[0]), int(coords[2]), int(coords[1]), int(coords[3])]))}
-#
-#     auxiliaryfunctions.write_config(config, cfg)
-#     return cfg
+
+def select_cropping_area(config, videos=None):
+    """
+    Interactively select the cropping area of all videos in the config.
+    A user interface pops up with a frame to select the cropping parameters.
+    Use the left click to draw a box and hit the button 'set cropping parameters'
+    to store the cropping parameters for a video in the config.yaml file.
+
+    Parameters
+    ----------
+    config : string
+        Full path of the config.yaml file as a string.
+
+    videos : optional (default=None)
+        List of videos whose cropping areas are to be defined. Note that full paths are required.
+        By default, all videos in the config are successively loaded.
+
+    Returns
+    -------
+    cfg : dict
+        Updated project configuration
+    """
+    from deeplabcut.utils import auxiliaryfunctions, auxfun_videos
+
+    cfg = auxiliaryfunctions.read_config(config)
+    if videos is None:
+        videos = cfg['video_sets']
+
+    for video in videos:
+        coords = auxfun_videos.draw_bbox(video)
+        if coords:
+            cfg['video_sets'][video] = {
+                'crop': ', '.join(map(str, [int(coords[0]), int(coords[2]), int(coords[1]), int(coords[3])]))}
+
+    auxiliaryfunctions.write_config(config, cfg)
+    return cfg
 
 
 def extract_frames(config,

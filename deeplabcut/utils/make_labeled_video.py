@@ -70,7 +70,7 @@ def CreateVideo(clip,Dataframe,pcutoff,dotsize,colormap,DLCscorer,bodyparts2plot
 
         fps=clip.fps()
         nframes = len(Dataframe.index)
-        duration = nframes/fps
+        duration = nframes/(fps if fps > 0 else np.nan) # FIXME: zerodivisionerror : KS200721 dirty fix
 
         print("Duration of video [s]: ", round(duration,2), ", recorded with ", round(fps,2),"fps!")
         print("Overall # of frames: ", nframes, "with cropped frame dimensions: ",nx,ny)

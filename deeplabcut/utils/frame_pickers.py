@@ -302,7 +302,13 @@ class NumpyPicker(FramePicker):
             self._data = loaded["frames"]
         except:
             self._data = loaded
-        self.nframes   = self._data.shape[0]
+        self.nframes, self.height, self.width = self._data.shape[:3]
+        if self._data.ndim == 4:
+            self.nchan = self._data.shape[3]
+        else:
+            self.nchan = 1
+        self.fps = 1 # FIXME
+        self.duration = self.nframes # FIXME
 
     def close(self):
         pass

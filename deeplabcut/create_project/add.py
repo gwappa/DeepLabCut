@@ -7,9 +7,13 @@ Please see AUTHORS for contributors.
 https://github.com/AlexEMG/DeepLabCut/blob/master/AUTHORS
 Licensed under GNU Lesser General Public License v3.0
 """
+from deeplabcut.utils import frame_pickers
 
-
-def add_new_videos(config,videos,copy_videos=False,coords=None):
+def add_new_videos(config,
+                   videos,
+                   copy_videos=False,
+                   coords=None,
+                   driver="opencv"):
     """
     Add new videos to the config file at any stage of the project.
 
@@ -30,7 +34,7 @@ def add_new_videos(config,videos,copy_videos=False,coords=None):
     --------
     Video will be added, with cropping dimenions according to the frame dimensinos of mouse5.avi
     >>> deeplabcut.add_new_videos('/home/project/reaching-task-Tanmay-2018-08-23/config.yaml',['/data/videos/mouse5.avi'])
-    
+
     Video will be added, with cropping dimenions [0,100,0,200]
     >>> deeplabcut.add_new_videos('/home/project/reaching-task-Tanmay-2018-08-23/config.yaml',['/data/videos/mouse5.avi'],copy_videos=False,coords=[[0,100,0,200]])
 
@@ -60,7 +64,7 @@ def add_new_videos(config,videos,copy_videos=False,coords=None):
         Creates directory under data & perhaps copies videos (to /video)
         """
         p.mkdir(parents = True, exist_ok = True)
-    
+
     destinations = [video_path.joinpath(vp.name) for vp in videos]
     if copy_videos==True:
         for src, dst in zip(videos, destinations):
@@ -68,7 +72,7 @@ def add_new_videos(config,videos,copy_videos=False,coords=None):
                 pass
             else:
                 print("Copying the videos")
-                shutil.copy(os.fspath(src),os.fspath(dst)) 
+                shutil.copy(os.fspath(src),os.fspath(dst))
     else:
         for src, dst in zip(videos, destinations):
             if dst.exists():
@@ -78,30 +82,37 @@ def add_new_videos(config,videos,copy_videos=False,coords=None):
                 src = str(src)
                 dst = str(dst)
                 os.symlink(src, dst)
-    
+
     if copy_videos==True:
         videos=destinations # in this case the *new* location should be added to the config file
     # adds the video list to the config.yaml file
     for idx,video in enumerate(videos):
         try:
-# For windows os.path.realpath does not work and does not link to the real video. 
+# For windows os.path.realpath does not work and does not link to the real video.
            video_path = str(Path.resolve(Path(video)))
 #           video_path = os.path.realpath(video)
         except:
            video_path = os.readlink(video)
 
-        vcap = cv2.VideoCapture(video_path)
-        if vcap.isOpened():
-            # get vcap property
-           width = int(vcap.get(cv2.CAP_PROP_FRAME_WIDTH))
-           height = int(vcap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-           if coords == None:
-                cfg['video_sets'].update({video_path : {'crop': ', '.join(map(str, [0, width, 0, height]))}})
-           else:
+        try:
+            picker = frame_pickers.get_frame_picker(video_path, driver=driver)
+            # vcap = cv2.VideoCapture(video_path)
+            # if vcap.isOpened():
+            #     # get vcap property
+            #    width = int(vcap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            #    height = int(vcap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            if coords == None:
+                cfg['video_sets'].update({video_path : {'crop': ', '.join(map(str, [0, picker.width, 0, picker.height]))}})
+            else:
                 c = coords[idx]
                 cfg['video_sets'].update({video_path : {'crop': ', '.join(map(str, c))}})
-        else:
-           print("Cannot open the video file!")
+            picker.close()
+            # else:
+            #    print("Cannot open the video file!")
+        except:
+            from traceback import print_exc
+            print_exc()
+            print(f"Cannot open the video file: {video_path}")
 
     auxiliaryfunctions.write_config(config,cfg)
     print("New video was added to the project! Use the function 'extract_frames' to select frames for labeling.")

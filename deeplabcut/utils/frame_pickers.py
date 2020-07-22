@@ -19,6 +19,8 @@ import cv2
 
 class FramePicker(object):
     """the base driver class for extracting frames from a video."""
+    driver = None
+
     def __init__(self, path):
         self.path         = str(path)
         self.nframes      = 0
@@ -99,6 +101,8 @@ class FramePicker(object):
 
 class OpenCVPicker(FramePicker):
     """the default frame picker based on OpenCV."""
+    driver = "opencv"
+
     def __init__(self, path):
         super(OpenCVPicker, self).__init__(path)
         self.cap      = cv2.VideoCapture(str(path))
@@ -164,6 +168,8 @@ class OpenCVPicker(FramePicker):
 
 class MoviePyPicker(FramePicker):
     """the legacy frame picker based on MoviePy."""
+    driver = "moviepy"
+
     def __init__(self, path):
         from moviepy.editor import VideoFileClip
         super(MoviePyPicker, self).__init__(path)
@@ -215,6 +221,8 @@ class MoviePyPicker(FramePicker):
 
 class SkVideoPicker(FramePicker):
     """an experimental, rather slow frame picker based on scikit-video/ffmpeg."""
+    driver = "skvideo"
+
     def __init__(self, path):
         super(SkVideoPicker, self).__init__(path)
         self.reader   = FFmpegReader(str(path))
@@ -300,6 +308,8 @@ class SkVideoPicker(FramePicker):
         return self.pick_single(index)
 
 class NumpyPicker(FramePicker):
+    driver = "numpy"
+
     def __init__(self, path):
         super().__init__(path)
         loaded = np.load(str(path))

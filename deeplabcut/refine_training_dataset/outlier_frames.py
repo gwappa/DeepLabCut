@@ -434,9 +434,9 @@ def ExtractFramesbasedonPreselection(Index,
             DF.to_csv(str(machinefile.with_suffix(".csv")))
         try:
             if cfg['cropping']:
-                add.add_new_videos(config,[video],coords=[coords]) # make sure you pass coords as a list
+                add.add_new_videos(config, [video], coords=[coords], driver=picker.driver) # make sure you pass coords as a list
             else:
-                add.add_new_videos(config,[video],coords=None)
+                add.add_new_videos(config, [video], coords=None, driver=picker.driver)
         except: #can we make a catch here? - in fact we should drop indices from DataCombined if they are in CollectedData.. [ideal behavior; currently this is pretty unlikely]
             print("AUTOMATIC ADDING OF VIDEO TO CONFIG FILE FAILED! You need to do this manually for including it in the config.yaml file!")
             print("Videopath:", video,"Coordinates for cropping:", coords)

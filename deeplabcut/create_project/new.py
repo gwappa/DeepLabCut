@@ -13,9 +13,16 @@ from pathlib import Path
 import cv2
 from deeplabcut import DEBUG
 import shutil
+from deeplabcut.utils import frame_pickers
 
 
-def create_new_project(project, experimenter, videos, working_directory=None, copy_videos=False,videotype='.avi'):
+def create_new_project(project,
+                       experimenter,
+                       videos,
+                       working_directory=None,
+                       copy_videos=False,
+                       videotype='.avi',
+                       driver="opencv"):
     """Creates a new project directory, sub-directories and a basic configuration file. The configuration file is loaded with the default values. Change its parameters to your projects need.
 
     Parameters
@@ -91,7 +98,7 @@ def create_new_project(project, experimenter, videos, working_directory=None, co
                 vids = vids + [i]
             videos = vids
 
-    videos = [Path(vp) for vp in videos]
+    videos = [Path(vp).resolve() for vp in videos]
     dirs = [data_path/Path(i.stem) for i in videos]
     for p in dirs:
         """
@@ -133,14 +140,23 @@ def create_new_project(project, experimenter, videos, working_directory=None, co
         except:
            rel_video_path = os.readlink(str(video))
 
-        vcap = cv2.VideoCapture(rel_video_path)
-        if vcap.isOpened():
-           width = int(vcap.get(cv2.CAP_PROP_FRAME_WIDTH))
-           height = int(vcap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-           video_sets[rel_video_path] = {'crop': ', '.join(map(str, [0, width, 0, height]))}
-        else:
-           print("Cannot open the video file! Skipping to the next one...")
-           os.remove(video)  # Removing the video or link from the project
+        try:
+            picker = frame_pickers.get_frame_picker(rel_video_path, driver=driver)
+            video_sets[rel_video_path] = {'crop': ', '.join(map(str, [0, picker.width, 0, picker.height]))}
+            picker.close()
+            # vcap = cv2.VideoCapture(rel_video_path)
+            # if vcap.isOpened():
+            #    width = int(vcap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            #    height = int(vcap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            #    video_sets[rel_video_path] = {'crop': ', '.join(map(str, [0, width, 0, height]))}
+            # else:
+            #    print("Cannot open the video file! Skipping to the next one...")
+            #    os.remove(video)  # Removing the video or link from the project
+        except:
+            from traceback import print_exc
+            print_exc()
+            os.remove(video)
+            print(f"Skipping: {rel_video_path} (cannot open)")
 
     if not len(video_sets):
         # Silently sweep the files that were already written.

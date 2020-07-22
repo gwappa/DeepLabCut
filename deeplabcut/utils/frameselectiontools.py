@@ -59,7 +59,7 @@ def uniform_frame_selection(picker, numframes2pick, start=0, stop=1, subindices=
 
 def kmeans_based_frame_selection(picker, numframes2pick, start=0, stop=1,
                                 subindices=None, step=1, resizewidth=30,
-                                batchsize=100, max_iter=50):
+                                batchsize=100, max_iter=50, in_color=False):
     ''' This code downsamples the video to a width of resizewidth.
     The video is extracted as a numpy array, which is then clustered with kmeans, whereby each frames is treated as a vector.
     Frames from different clusters are then selected for labeling. This procedure makes sure that the frames "look different",
@@ -90,11 +90,14 @@ def kmeans_based_frame_selection(picker, numframes2pick, start=0, stop=1,
         picker.set_resize(resizewidth)
         DATA = None
         for counter, index in tqdm(enumerate(subindices)):
-            image = picker.pick_single(index, crop=True, resize=True, transform_color=False) #color trafo not necessary; lack thereof improves speed.
-            if picker.is_colored:
-                image = np.concatenate([image[0], image[1], image[2]], axis=1)
-            elif picker.ncolors == 1:
-                image = image.mean(2)
+            image = picker.pick_single(index, crop=True, resize=True, transform_color=in_color)
+            if in_color == False:
+                # 3-channel image must be somehow reduced
+                if picker.is_colored:
+                    image = np.concatenate([image[0], image[1], image[2]], axis=1)
+                elif picker.ncolors == 1:
+                    image = image.mean(2) # FIXME: lightness-based value conversion?
+
             if DATA is None:
                 DATA = np.empty((nframes,)+image.shape, dtype=float)
             DATA[counter,:,:] = image
@@ -110,7 +113,7 @@ def kmeans_based_frame_selection(picker, numframes2pick, start=0, stop=1,
             # pick one frame per cluster
             members = subindices[kmeans.labels_ == clusterid]
             if members.size > 0:
-                frames2pick.append(np.random.choice(members, size=1))
+                frames2pick.append(np.random.choice(members, size=1)[0])
         return frames2pick
 
 selection_algorithms = {

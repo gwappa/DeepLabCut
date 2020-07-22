@@ -24,6 +24,7 @@ class FramePicker(object):
         self.nframes      = 0
         self.img_as_ubyte = img_as_ubyte
         self.crop         = None
+        self.resize       = None
         self.is_open      = False
 
     def __getattr__(self, name):
@@ -37,7 +38,7 @@ class FramePicker(object):
                 self._is_colored = self._ncolors > 1
             return getattr(self, '_' + name)
         else:
-            return super(FramePicker, self).__getattr__(name)
+            raise AttributeError(name)
 
     def close(self):
         raise NotImplementedError()
@@ -75,17 +76,17 @@ class FramePicker(object):
         raise NotImplementedError()
 
     def save_impl(self, index, image=None, output_dir='', basename='img',
-                    crop=False, resize=False, transform_color=True):
+                    crop=False, resize=False, transform_color=True, indexwidth=5):
         if image is None:
             image = self.pick_single(index)
-        savepath = os.path.join(output_dir, "{base}{index}.png".format(
-                                base=basename, index=str(index).zfill(self.indexlength)))
+        savepath = os.path.join(str(output_dir) , "{base}{index}.png".format(
+                                base=basename, index=str(index).zfill(indexwidth)))
         io.imsave(savepath, image)
 
     def save_single(self, index, output_dir='', basename='img',
-                    crop=False, resize=False, transform_color=True):
+                    crop=False, resize=False, transform_color=True, indexwidth=5):
         self.save_impl(index, image=None, output_dir=output_dir, basename=basename,
-                    crop=crop, resize=resize, transform_color=transform_color)
+                    crop=crop, resize=resize, transform_color=transform_color, indexwidth=indexwidth)
 
     def save_multiple(self, indices, output_dir='', basename='img',
                     crop=False, resize=False, transform_color=True):
@@ -329,7 +330,7 @@ class NumpyPicker(FramePicker):
         if ndim == 4:
             return shape[-1]
         elif ndim == 3:
-            return 1
+            return 0
         else:
             raise ValueError(f"expected 3-d or 4-d data, got {ndim}-d")
 

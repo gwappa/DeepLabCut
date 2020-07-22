@@ -16,12 +16,31 @@ import pandas as pd
 import statsmodels.api as sm
 from deeplabcut.utils import auxiliaryfunctions, visualization
 from deeplabcut.utils import frameselectiontools
+from deeplabcut.utils import frame_pickers
 import argparse
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from skimage.util import img_as_ubyte
+from skimage import io as imgio
 
-def extract_outlier_frames(config,videos,videotype='avi',shuffle=1,trainingsetindex=0,outlieralgorithm='jump',comparisonbodyparts='all',epsilon=20,p_bound=.01,ARdegree=3,MAdegree=1,alpha=.01,extractionalgorithm='kmeans',automatic=False,cluster_resizewidth=30,cluster_color=False,opencv=True,savelabeled=True, destfolder=None):
+def extract_outlier_frames(config,
+                           videos,
+                           videotype='avi',
+                           shuffle=1,
+                           trainingsetindex=0,
+                           outlieralgorithm='jump',
+                           comparisonbodyparts='all',
+                           epsilon=20,
+                           p_bound=.01,
+                           ARdegree=3,
+                           MAdegree=1,
+                           alpha=.01,
+                           extractionalgorithm='kmeans',
+                           automatic=False,
+                           cluster_resizewidth=320,
+                           cluster_color=False,
+                           driver="opencv",
+                           destfolder=None):
     """
     Extracts the outlier frames in case, the predictions are not correct for a certain video from the cropped video running from
     start to stop as defined in config.yaml.
@@ -91,11 +110,8 @@ def extract_outlier_frames(config,videos,videotype='avi',shuffle=1,trainingsetin
         If false then each downsampled image is treated as a grayscale vector (discarding color information). If true, then the color channels are considered. This increases
         the computational complexity.
 
-    opencv: bool, default: True
-        Uses openCV for loading & extractiong (otherwise moviepy (legacy))
-
-    savelabeled: bool, default: True
-        If true also saves frame with predicted labels in each folder.
+    driver: str, default: "opencv"
+        the frame picker type used to read frames from videos.
 
     destfolder: string, optional
         Specifies the destination folder that was used for storing analysis data (default is the path of the video).
@@ -168,7 +184,7 @@ def extract_outlier_frames(config,videos,videotype='avi',shuffle=1,trainingsetin
               os.chdir(str(wd))
               from deeplabcut.refine_training_dataset import outlier_frame_extraction_toolbox
 
-              outlier_frame_extraction_toolbox.show(config,video,shuffle,Dataframe,scorer,savelabeled)
+              outlier_frame_extraction_toolbox.show(config,video,shuffle,Dataframe,scorer)
           # Run always except when the outlieralgorithm == manual.
           if not outlieralgorithm=='manual':
               Indices=np.sort(list(set(Indices))) #remove repetitions.
@@ -188,7 +204,17 @@ def extract_outlier_frames(config,videos,videotype='avi',shuffle=1,trainingsetin
 
               if askuser=='y' or askuser=='yes' or askuser=='Ja' or askuser=='ha': # multilanguage support :)
                   #Now extract from those Indices!
-                  ExtractFramesbasedonPreselection(Indices,extractionalgorithm,Dataframe,dataname,scorer,video,cfg,config,opencv,cluster_resizewidth,cluster_color,savelabeled)
+                  ExtractFramesbasedonPreselection(Indices,
+                                                   extractionalgorithm,
+                                                   Dataframe,
+                                                   dataname,
+                                                   scorer,
+                                                   video,
+                                                   cfg,
+                                                   config,
+                                                   driver,
+                                                   cluster_resizewidth,
+                                                   cluster_color)
               else:
                   print("Nothing extracted, please change the parameters and start again...")
 
@@ -298,58 +324,73 @@ def ComputeDeviations(Dataframe,cfg,comparisonbodyparts,scorer,dataname,p_bound,
             return np.zeros(ntimes), np.zeros(ntimes)
 
 
-def ExtractFramesbasedonPreselection(Index,extractionalgorithm,Dataframe,dataname,scorer,video,cfg,config,opencv=True,cluster_resizewidth=30,cluster_color=False,savelabeled=True):
+def ExtractFramesbasedonPreselection(Index,
+                                     extractionalgorithm,
+                                     Dataframe,
+                                     dataname,
+                                     scorer,
+                                     video,
+                                     cfg,
+                                     config,
+                                     driver="opencv",
+                                     cluster_resizewidth=30,
+                                     cluster_color=False):
     from deeplabcut.create_project import add
     start  = cfg['start']
     stop = cfg['stop']
     numframes2extract = cfg['numframes2pick']
     bodyparts=cfg['bodyparts']
 
-    videofolder = str(Path(video).parents[0])
-    vname = str(Path(video).stem)
-    tmpfolder = os.path.join(cfg['project_path'],'labeled-data', vname)
-    if os.path.isdir(tmpfolder):
+    video       = Path(video)
+    videofolder = video.parent
+    vname       = video
+    labeldir    = Path(cfg["project_path"]) / "labeled-data"
+    destfolder  = labeldir / vname
+    if destfolder.is_dir():
         print("Frames from video", vname, " already extracted (more will be added)!")
     else:
-        auxiliaryfunctions.attempttomakefolder(tmpfolder)
+        destfolder.mkdir(parents=True)
 
     nframes = np.size(Dataframe.index)
     print("Loading video...")
-    if opencv:
-        import cv2
-        cap=cv2.VideoCapture(video)
-        fps = cap.get(5)
-        duration=nframes*1./fps
-        size=(int(cap.get(4)),int(cap.get(3)))
-    else:
-        from moviepy.editor import VideoFileClip
-        clip = VideoFileClip(video)
-        fps = clip.fps
-        duration=clip.duration
-        size=clip.size
+    picker = frame_pickers.get_frame_picker(video, driver=driver)
+    # if opencv:
+    #     import cv2
+    #     cap=cv2.VideoCapture(video)
+    #     fps = cap.get(5)
+    #     duration=nframes*1./fps
+    #     size=(int(cap.get(4)),int(cap.get(3)))
+    # else:
+    #     from moviepy.editor import VideoFileClip
+    #     clip = VideoFileClip(video)
+    #     fps = clip.fps
+    #     duration=clip.duration
+    #     size=clip.size
 
     if  cfg['cropping']:  # one might want to adjust
         coords = (cfg['x1'],cfg['x2'],cfg['y1'], cfg['y2'])
+        picker.set_crop(coords)
     else:
-        coords = None
+        coords = (0, picker.width, 0, picker.height)
 
-    print("Duration of video [s]: ", duration, ", recorded @ ", fps,"fps!")
-    print("Overall # of frames: ", nframes, "with (cropped) frame dimensions: ",)
+    print("Duration of video [s]: ", picker.duration, ", recorded @ ", picker.fps,"fps!")
+    print("Overall # of frames: ", picker.nframes, "with (cropped) frame dimensions: ", coords)
     if extractionalgorithm=='uniform':
-        if opencv:
-            frames2pick=frameselectiontools.UniformFramescv2(cap,numframes2extract,start,stop,Index)
-        else:
-            frames2pick=frameselectiontools.UniformFrames(clip,numframes2extract,start,stop,Index)
+        frames2pick = frameselectiontools.uniform_frame_selection(picker,
+                                                                  numframes2extract,
+                                                                  start,
+                                                                  stop,
+                                                                  Index)
     elif extractionalgorithm=='kmeans':
-        if opencv:
-            frames2pick=frameselectiontools.KmeansbasedFrameselectioncv2(cap,numframes2extract,start,stop,cfg['cropping'],coords,Index,resizewidth=cluster_resizewidth,color=cluster_color)
-        else:
-            if  cfg['cropping']:
-                clip = clip.crop(y1=cfg['y1'], y2=cfg['x2'], x1=cfg['x1'], x2=cfg['x2'])
-            frames2pick=frameselectiontools.KmeansbasedFrameselection(clip,numframes2extract,start,stop,Index,resizewidth=cluster_resizewidth,color=cluster_color)
-
+        frames2pick = frameselectiontools.kmeans_based_frame_selection(picker,
+                                                                       numframes2extract,
+                                                                       start,
+                                                                       stop,
+                                                                       Index,
+                                                                       resizewidth=cluster_resizewidth,
+                                                                       in_color=cluster_color)
     else:
-        print("Please implement this method yourself! Currently the options are 'kmeans', 'jump', 'uniform'.")
+        print("Please implement this method yourself! Currently the options are 'kmeans', 'uniform'.")
         frames2pick=[]
 
     # Extract frames + frames with plotted labels and store them in folder (with name derived from video name) nder labeled-data
@@ -357,37 +398,40 @@ def ExtractFramesbasedonPreselection(Index,extractionalgorithm,Dataframe,datanam
     colors = visualization.get_cmap(len(bodyparts),cfg['colormap'])
     strwidth = int(np.ceil(np.log10(nframes))) #width for strings
     for index in frames2pick: ##tqdm(range(0,nframes,10)):
-        if opencv:
-            PlottingSingleFramecv2(cap,cv2,cfg['cropping'],coords,Dataframe,bodyparts,tmpfolder,index,scorer,cfg['dotsize'],cfg['pcutoff'],cfg['alphavalue'],colors,strwidth,savelabeled)
-        else:
-            PlottingSingleFrame(clip,Dataframe,bodyparts,tmpfolder,index,scorer,cfg['dotsize'],cfg['pcutoff'],cfg['alphavalue'],colors,strwidth,savelabeled)
-        plt.close("all")
+        picker.save_single(index, output_dir=destfolder, indexwidth=strwidth, crop=cfg["cropping"])
+        # if opencv:
+        #     PlottingSingleFramecv2(cap,cv2,cfg['cropping'],coords,Dataframe,bodyparts,tmpfolder,index,scorer,cfg['dotsize'],cfg['pcutoff'],cfg['alphavalue'],colors,strwidth,savelabeled)
+        # else:
+        #     PlottingSingleFrame(clip,Dataframe,bodyparts,tmpfolder,index,scorer,cfg['dotsize'],cfg['pcutoff'],cfg['alphavalue'],colors,strwidth,savelabeled)
+        # plt.close("all")
 
     #close videos
-    if opencv:
-        cap.release()
-    else:
-        clip.close()
-        del clip
+    picker.close()
+    # if opencv:
+    #     cap.release()
+    # else:
+    #     clip.close()
+    #     del clip
 
     # Extract annotations based on DeepLabCut and store in the folder (with name derived from video name) under labeled-data
     if len(frames2pick)>0:
         #Dataframe = pd.read_hdf(os.path.join(videofolder,dataname+'.h5'))
-        DF = Dataframe.iloc[frames2pick]
-        DF.index=[os.path.join('labeled-data', vname,"img"+str(index).zfill(strwidth)+".png") for index in DF.index] #exchange index number by file names.
+        DF       = Dataframe.iloc[frames2pick]
+        DF.index = [str(destfolder / f"img{str(index).zfill(strwidth)}.png") for index in DF.index] #exchange index number by file names.
+        # DF.index=[os.path.join('labeled-data', vname,"img"+str(index).zfill(strwidth)+".png") for index in DF.index] #exchange index number by file names.
 
-        machinefile=os.path.join(tmpfolder,'machinelabels-iter'+str(cfg['iteration'])+'.h5')
-        if Path(machinefile).is_file():
-            Data = pd.read_hdf(machinefile, 'df_with_missing')
+        machinefile = destfolder / f"machinelabels-iter{str(cfg['iteration'])}.h5"
+        if machinefile.is_file():
+            Data = pd.read_hdf(str(machinefile), 'df_with_missing')
             DataCombined = pd.concat([Data, DF])
             #drop duplicate labels:
             DataCombined = DataCombined[~DataCombined.index.duplicated(keep='first')]
 
-            DataCombined.to_hdf(machinefile, key='df_with_missing', mode='w')
-            DataCombined.to_csv(os.path.join(tmpfolder, "machinelabels.csv")) #this is always the most current one (as reading is from h5)
+            DataCombined.to_hdf(str(machinefile), key='df_with_missing', mode='w')
+            DataCombined.to_csv(machinefile.with_suffix(".csv"))
         else:
-            DF.to_hdf(machinefile,key='df_with_missing',mode='w')
-            DF.to_csv(os.path.join(tmpfolder, "machinelabels.csv"))
+            DF.to_hdf(str(machinefile), key='df_with_missing', mode='w')
+            DF.to_csv(str(machinefile.with_suffix(".csv")))
         try:
             if cfg['cropping']:
                 add.add_new_videos(config,[video],coords=[coords]) # make sure you pass coords as a list
@@ -403,92 +447,92 @@ def ExtractFramesbasedonPreselection(Index,extractionalgorithm,Dataframe,datanam
     else:
         print("No frames were extracted.")
 
-def PlottingSingleFrame(clip,Dataframe,bodyparts2plot,tmpfolder,index,scorer,dotsize,pcutoff,alphavalue,colors,strwidth=4,savelabeled=True):
-        ''' Label frame and save under imagename / this is already cropped (for clip) '''
-        from skimage import io
-        imagename1 = os.path.join(tmpfolder,"img"+str(index).zfill(strwidth)+".png")
-        imagename2 = os.path.join(tmpfolder,"img"+str(index).zfill(strwidth)+"labeled.png")
-
-        if os.path.isfile(os.path.join(tmpfolder,"img"+str(index).zfill(strwidth)+".png")):
-            pass
-        else:
-            plt.axis('off')
-            image = img_as_ubyte(clip.get_frame(index * 1. / clip.fps))
-            io.imsave(imagename1,image)
-
-            if np.ndim(image) > 2:
-                h, w, nc = np.shape(image)
-            else:
-                h, w = np.shape(image)
-
-            plt.figure(frameon=False, figsize=(w * 1. / 100, h * 1. / 100))
-            plt.subplots_adjust(left=0, bottom=0, right=1, top=1, wspace=0, hspace=0)
-            plt.imshow(image)
-            for bpindex, bp in enumerate(bodyparts2plot):
-                if Dataframe[scorer][bp]['likelihood'].values[index] > pcutoff:
-                    plt.plot(
-                        Dataframe[scorer][bp]['x'].values[index],
-                        Dataframe[scorer][bp]['y'].values[index],'.',
-                        color=colors(bpindex),
-                        ms=dotsize,
-                        alpha=alphavalue)
-
-            plt.xlim(0, w)
-            plt.ylim(0, h)
-            plt.axis('off')
-            plt.subplots_adjust(
-                left=0, bottom=0, right=1, top=1, wspace=0, hspace=0)
-            plt.gca().invert_yaxis()
-            if savelabeled:
-                plt.savefig(imagename2)
-            plt.close("all")
-
-def PlottingSingleFramecv2(cap,cv2,crop,coords,Dataframe,bodyparts2plot,tmpfolder,index,scorer,dotsize,pcutoff,alphavalue,colors,strwidth=4,savelabeled=True):
-        ''' Label frame and save under imagename / cap is not already cropped. '''
-        from skimage import io
-        imagename1 = os.path.join(tmpfolder,"img"+str(index).zfill(strwidth)+".png")
-        imagename2 = os.path.join(tmpfolder,"img"+str(index).zfill(strwidth)+"labeled.png")
-
-        if not os.path.isfile(imagename1):
-            plt.axis('off')
-            cap.set(1, index)
-            ret, frame = cap.read()
-            if not ret:
-                print('Frame could not be read.')
-                return
-            image = img_as_ubyte(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-            if crop:
-                image = image[int(coords[2]):int(coords[3]), int(coords[0]):int(coords[1]), :]
-
-            io.imsave(imagename1,image)
-
-            if np.ndim(image) > 2:
-                h, w, nc = np.shape(image)
-            else:
-                h, w = np.shape(image)
-
-            plt.figure(frameon=False, figsize=(w * 1. / 100, h * 1. / 100))
-            plt.subplots_adjust(left=0, bottom=0, right=1, top=1, wspace=0, hspace=0)
-            plt.imshow(image)
-            for bpindex, bp in enumerate(bodyparts2plot):
-                if Dataframe[scorer][bp]['likelihood'].values[index] > pcutoff:
-                    plt.plot(
-                        Dataframe[scorer][bp]['x'].values[index],
-                        Dataframe[scorer][bp]['y'].values[index],'.',
-                        color=colors(bpindex),
-                        ms=dotsize,
-                        alpha=alphavalue)
-
-            plt.xlim(0, w)
-            plt.ylim(0, h)
-            plt.axis('off')
-            plt.subplots_adjust(
-                left=0, bottom=0, right=1, top=1, wspace=0, hspace=0)
-            plt.gca().invert_yaxis()
-            if savelabeled:
-                plt.savefig(imagename2)
-            plt.close("all")
-
+# def PlottingSingleFrame(clip,Dataframe,bodyparts2plot,tmpfolder,index,scorer,dotsize,pcutoff,alphavalue,colors,strwidth=4,savelabeled=True):
+#         ''' Label frame and save under imagename / this is already cropped (for clip) '''
+#         from skimage import io
+#         imagename1 = os.path.join(tmpfolder,"img"+str(index).zfill(strwidth)+".png")
+#         imagename2 = os.path.join(tmpfolder,"img"+str(index).zfill(strwidth)+"labeled.png")
+#
+#         if os.path.isfile(os.path.join(tmpfolder,"img"+str(index).zfill(strwidth)+".png")):
+#             pass
+#         else:
+#             plt.axis('off')
+#             image = img_as_ubyte(clip.get_frame(index * 1. / clip.fps))
+#             io.imsave(imagename1,image)
+#
+#             if np.ndim(image) > 2:
+#                 h, w, nc = np.shape(image)
+#             else:
+#                 h, w = np.shape(image)
+#
+#             plt.figure(frameon=False, figsize=(w * 1. / 100, h * 1. / 100))
+#             plt.subplots_adjust(left=0, bottom=0, right=1, top=1, wspace=0, hspace=0)
+#             plt.imshow(image)
+#             for bpindex, bp in enumerate(bodyparts2plot):
+#                 if Dataframe[scorer][bp]['likelihood'].values[index] > pcutoff:
+#                     plt.plot(
+#                         Dataframe[scorer][bp]['x'].values[index],
+#                         Dataframe[scorer][bp]['y'].values[index],'.',
+#                         color=colors(bpindex),
+#                         ms=dotsize,
+#                         alpha=alphavalue)
+#
+#             plt.xlim(0, w)
+#             plt.ylim(0, h)
+#             plt.axis('off')
+#             plt.subplots_adjust(
+#                 left=0, bottom=0, right=1, top=1, wspace=0, hspace=0)
+#             plt.gca().invert_yaxis()
+#             if savelabeled:
+#                 plt.savefig(imagename2)
+#             plt.close("all")
+#
+# def PlottingSingleFramecv2(cap,cv2,crop,coords,Dataframe,bodyparts2plot,tmpfolder,index,scorer,dotsize,pcutoff,alphavalue,colors,strwidth=4,savelabeled=True):
+#         ''' Label frame and save under imagename / cap is not already cropped. '''
+#         from skimage import io
+#         imagename1 = os.path.join(tmpfolder,"img"+str(index).zfill(strwidth)+".png")
+#         imagename2 = os.path.join(tmpfolder,"img"+str(index).zfill(strwidth)+"labeled.png")
+#
+#         if not os.path.isfile(imagename1):
+#             plt.axis('off')
+#             cap.set(1, index)
+#             ret, frame = cap.read()
+#             if not ret:
+#                 print('Frame could not be read.')
+#                 return
+#             image = img_as_ubyte(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+#             if crop:
+#                 image = image[int(coords[2]):int(coords[3]), int(coords[0]):int(coords[1]), :]
+#
+#             io.imsave(imagename1,image)
+#
+#             if np.ndim(image) > 2:
+#                 h, w, nc = np.shape(image)
+#             else:
+#                 h, w = np.shape(image)
+#
+#             plt.figure(frameon=False, figsize=(w * 1. / 100, h * 1. / 100))
+#             plt.subplots_adjust(left=0, bottom=0, right=1, top=1, wspace=0, hspace=0)
+#             plt.imshow(image)
+#             for bpindex, bp in enumerate(bodyparts2plot):
+#                 if Dataframe[scorer][bp]['likelihood'].values[index] > pcutoff:
+#                     plt.plot(
+#                         Dataframe[scorer][bp]['x'].values[index],
+#                         Dataframe[scorer][bp]['y'].values[index],'.',
+#                         color=colors(bpindex),
+#                         ms=dotsize,
+#                         alpha=alphavalue)
+#
+#             plt.xlim(0, w)
+#             plt.ylim(0, h)
+#             plt.axis('off')
+#             plt.subplots_adjust(
+#                 left=0, bottom=0, right=1, top=1, wspace=0, hspace=0)
+#             plt.gca().invert_yaxis()
+#             if savelabeled:
+#                 plt.savefig(imagename2)
+#             plt.close("all")
+#
 
 def refine_labels(config,multianimal=False):
     """

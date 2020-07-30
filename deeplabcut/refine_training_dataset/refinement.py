@@ -64,7 +64,7 @@ class ImagePanel(wx.Panel):
         ylim = self.axes.get_ylim()
         self.axes.clear()
         im = io.imread(img)
-        ax = self.axes.imshow(im,cmap=cmap)
+        ax = self.axes.imshow(im) #,cmap=cmap) # KS200727 try to fix cases where the image is shown in weird color map
         self.orig_xlim = self.axes.get_xlim()
         self.orig_ylim = self.axes.get_ylim()
         divider = make_axes_locatable(self.axes)

@@ -343,7 +343,7 @@ def ExtractFramesbasedonPreselection(Index,
 
     video       = Path(video)
     videofolder = video.parent
-    vname       = video
+    vname       = video.stem
     labeldir    = Path(cfg["project_path"]) / "labeled-data"
     destfolder  = labeldir / vname
     if destfolder.is_dir():
@@ -354,18 +354,6 @@ def ExtractFramesbasedonPreselection(Index,
     nframes = np.size(Dataframe.index)
     print("Loading video...")
     picker = frame_pickers.get_frame_picker(video, driver=driver)
-    # if opencv:
-    #     import cv2
-    #     cap=cv2.VideoCapture(video)
-    #     fps = cap.get(5)
-    #     duration=nframes*1./fps
-    #     size=(int(cap.get(4)),int(cap.get(3)))
-    # else:
-    #     from moviepy.editor import VideoFileClip
-    #     clip = VideoFileClip(video)
-    #     fps = clip.fps
-    #     duration=clip.duration
-    #     size=clip.size
 
     if  cfg['cropping']:  # one might want to adjust
         coords = (cfg['x1'],cfg['x2'],cfg['y1'], cfg['y2'])
@@ -399,19 +387,9 @@ def ExtractFramesbasedonPreselection(Index,
     strwidth = int(np.ceil(np.log10(nframes))) #width for strings
     for index in frames2pick: ##tqdm(range(0,nframes,10)):
         picker.save_single(index, output_dir=destfolder, indexwidth=strwidth, crop=cfg["cropping"])
-        # if opencv:
-        #     PlottingSingleFramecv2(cap,cv2,cfg['cropping'],coords,Dataframe,bodyparts,tmpfolder,index,scorer,cfg['dotsize'],cfg['pcutoff'],cfg['alphavalue'],colors,strwidth,savelabeled)
-        # else:
-        #     PlottingSingleFrame(clip,Dataframe,bodyparts,tmpfolder,index,scorer,cfg['dotsize'],cfg['pcutoff'],cfg['alphavalue'],colors,strwidth,savelabeled)
-        # plt.close("all")
 
     #close videos
     picker.close()
-    # if opencv:
-    #     cap.release()
-    # else:
-    #     clip.close()
-    #     del clip
 
     # Extract annotations based on DeepLabCut and store in the folder (with name derived from video name) under labeled-data
     if len(frames2pick)>0:

@@ -6,7 +6,3 @@
 
 probably it is better to refer to it as `annotation_dir` in `create_labeled_video`, whereas it would be easier to have a proper `destfolder` keyword argument.
 
-## Weird `extract_outlier_frames` destination
-
-The destination of extracted outlier frames are just "weird". I need to fix it.
-

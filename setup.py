@@ -29,7 +29,7 @@ setuptools.setup(
                       'ipython','ipython-genutils',
                       'matplotlib==3.0.3','moviepy<=1.0.1','numpy','opencv-python~=3.4',
                       'pandas>=1.0.','patsy','python-dateutil','pyyaml>=5.1','requests',
-                      'ruamel.yaml~=0.15','setuptools','scikit-image','scikit-learn',
+                      'ruamel.yaml~=0.15','scikit-image','scikit-learn','scikit-video',
                       'scipy','six','statsmodels','tables',
                       'tensorpack>=0.9.7.1',
                       'tqdm','wheel'],

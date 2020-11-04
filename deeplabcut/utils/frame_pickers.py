@@ -131,12 +131,12 @@ class OpenCVPicker(FramePicker):
         else:
             return np.shape(img)[2]
 
-    def iter_frames(self, crop=False, resize=False, transform_color=True):
+    def iter_frames(self, crop=False, resize=False, transform_color=True, assert_color=True):
         if self.offset != 0:
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
         while self.cap.is_open():
             try:
-                yield self.read(crop=crop, resize=resize, transform_color=transform_color)
+                yield self.read(crop=crop, resize=resize, transform_color=transform_color, assert_color=assert_color)
             except RuntimeError:
                 break
 
@@ -146,18 +146,18 @@ class OpenCVPicker(FramePicker):
             raise ValueError("Choice of resizewidth actually upsamples!")
         self.resize = ratio
 
-    def read(self, crop=False, resize=False, transform_color=True):
+    def read(self, crop=False, resize=False, transform_color=True, assert_color=True):
         ret, img = self.cap.read()
         self.offset += 1
         if not ret:
             raise RuntimeError("could not read from the specified position")
-        img = self.condition_image_impl(img, crop, resize, transform_color)
+        img = self.condition_image_impl(img, crop, resize, transform_color, assert_color)
         return img_as_ubyte(img)
 
-    def pick_single(self, index, crop=False, resize=False, transform_color=True):
+    def pick_single(self, index, crop=False, resize=False, transform_color=True, assert_color=True):
         if self.offset != index:
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, index)
-        return self.read(crop=crop, resize=resize, transform_color=transform_color)
+        return self.read(crop=crop, resize=resize, transform_color=transform_color, assert_color=assert_color)
 
     def pick_at_fraction(self, frac):
         self.cap.set(cv2.CAP_PROP_POS_MSEC, frac*self.duration*1000)
@@ -260,12 +260,12 @@ class SkVideoPicker(FramePicker):
             raise ValueError("Choice of resizewidth actually upsamples!")
         self.resize = ratio
 
-    def iter_frames(self, crop=False, resize=False, transform_color=True):
+    def iter_frames(self, crop=False, resize=False, transform_color=True, assert_color=True):
         if (self.iterator is None) or (self.offset > 0):
             self.rewind()
         try:
             while True:
-                yield self.read(None, crop=crop, resize=resize, transform_color=transform_color)
+                yield self.read(None, crop=crop, resize=resize, transform_color=transform_color, assert_color=True)
         except StopIteration:
             pass
 
@@ -290,18 +290,15 @@ class SkVideoPicker(FramePicker):
             except StopIteration:
                 raise RuntimeError("reached end of stream while seeking")
 
-    def read(self, img=None, crop=False, resize=False, transform_color=None):
+    def read(self, img=None, crop=False, resize=False, transform_color=None, assert_color=True):
         if img is None:
             img = next(self.iterator)
-        if (crop == True) and (self.crop is not None):
-            img = img[int(self.crop[2]):int(self.crop[3]),int(self.crop[0]):int(self.crop[1])]
-        if (resize == True) and (self.resize is not None):
-            img = imresize(img, self.resize, interp='nearest')
+        img = self.condition_image_impl(img, crop, resize, transform_color, assert_color)
         return img_as_ubyte(img)
 
-    def pick_single(self, index, crop=False, resize=False, transform_color=None):
+    def pick_single(self, index, crop=False, resize=False, transform_color=None, assert_color=True):
         img = self.seek(index)
-        return self.read(img, crop=crop, resize=resize, transform_color=transform_color)
+        return self.read(img, crop=crop, resize=resize, transform_color=transform_color, assert_color=assert_color)
 
     def pick_at_fraction(self, frac):
         index = int(frac*self.nframes)

@@ -229,7 +229,7 @@ def analyze_videos(config, videos, videotype='avi', driver="opencv", shuffle=1, 
         print("No video/s found. Please check your path!")
         return DLCscorer
 
-def checkcropping(cfg,cap):
+def checkcropping(cfg,picker):
     print("Cropping based on the x1 = %s x2 = %s y1 = %s y2 = %s. You can adjust the cropping coordinates in the config.yaml file." %(cfg['x1'], cfg['x2'],cfg['y1'], cfg['y2']))
     nx=cfg['x2']-cfg['x1']
     ny=cfg['y2']-cfg['y1']
@@ -237,7 +237,7 @@ def checkcropping(cfg,cap):
         pass
     else:
         raise Exception('Please check the order of cropping parameter!')
-    if cfg['x1']>=0 and cfg['x2']<int(cap.get(3)+1) and cfg['y1']>=0 and cfg['y2']<int(cap.get(4)+1):
+    if cfg['x1']>=0 and cfg['x2']<int(picker.width+1) and cfg['y1']>=0 and cfg['y2']<int(picker.height+1):
         pass #good cropping box
     else:
         raise Exception('Please check the boundary of cropping!')
@@ -320,87 +320,51 @@ def GetPoseS(cfg,dlc_cfg, sess, inputs, outputs, picker):
     pbar.close()
     return PredictedData,nframes
 
-def GetPoseS_GTF(cfg,dlc_cfg, sess, inputs, outputs, picker):
-    ''' Non batch wise pose estimation for video cap.'''
-    if cfg['cropping']:
-        ny,nx=checkcropping(cfg,cap)
-        picker.set_crop(cfg['x1'], cfg['x2'], cfg['y1'], cfg['y2'])
-
-    nframes     = picker.nframes
-    pose_tensor = predict.extract_GPUprediction(outputs, dlc_cfg) #extract_output_tensor(outputs, dlc_cfg)
-    PredictedData = np.zeros((nframes, 3 * len(dlc_cfg['all_joints_names'])))
-    pbar=tqdm(total=nframes)
-    counter=0
-    step=max(10,int(nframes/100))
-
-    for frame in picker.iter_frames(crop=cfg["cropping"],
-                                    transform_color=True,
-                                    assert_color=True): # FIXME: KS200721: it may depend
-        if counter%step==0:
-            pbar.update(step)
-
-        pose = sess.run(pose_tensor, feed_dict={inputs: np.expand_dims(frame, axis=0).astype(float)})
-        pose[:, [0,1,2]] = pose[:, [1,0,2]]
-        # pose = predict.getpose(frame, dlc_cfg, sess, inputs, outputs)
-        PredictedData[counter, :] = pose.flatten()  # NOTE: thereby cfg['all_joints_names'] should be same order as bodyparts!
-
-        counter+=1
-
-    pbar.close()
-    return PredictedData,counter
-
-def GetPoseF_GTF(cfg,dlc_cfg, sess, inputs, outputs,picker,batchsize):
-    ''' Batchwise prediction of pose '''
+def get_pose(cfg, dlc_cfg, sess, inputs, outputs, picker, batchsize, use_gpu=True):
+    ''' pose prediction '''
+    if use_gpu == False:
+        # FIXME: migrate from GetPoseF / GetPoseS
+        raise NotImplementedError("CPU-based pose prediction")
     nframes = picker.nframes
     PredictedData = np.zeros((nframes, 3 * len(dlc_cfg['all_joints_names'])))
     batch_ind = 0 # keeps track of which image within a batch should be written to
     batch_num = 0 # keeps track of which batch you are at
-    ny,nx=int(cap.get(4)),int(cap.get(3))
-    if cfg['cropping']:
-        ny,nx=checkcropping(cfg,cap)
 
-    raise NotImplementedError() # FIXME: KS200721 dirty workaround
+    if cfg['cropping']:
+        ny,nx=checkcropping(cfg,picker)
+    else:
+        ny,nx=int(picker.height),int(picker.width)
+
     pose_tensor = predict.extract_GPUprediction(outputs, dlc_cfg) #extract_output_tensor(outputs, dlc_cfg)
     frames = np.empty((batchsize, ny, nx, 3), dtype='ubyte') # this keeps all frames in a batch
     pbar=tqdm(total=nframes)
     counter=0
     step=max(10,int(nframes/100))
-    while(cap.isOpened()):
-            if counter%step==0:
-                pbar.update(step)
-            ret, frame = cap.read()
-            if ret:
-                frame=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                if cfg['cropping']:
-                    frames[batch_ind] = img_as_ubyte(frame[cfg['y1']:cfg['y2'],cfg['x1']:cfg['x2']])
-                else:
-                    frames[batch_ind] = img_as_ubyte(frame)
+    for frame in picker.iter_frames(crop=cfg["cropping"],
+                                    transform_color=True,
+                                    assert_color=True): # FIXME: KS200721: it may depend
+        if counter%step==0:
+            pbar.update(step)
+        frames[batch_ind] = frame
+        if batch_ind==batchsize-1:
+            pose = sess.run(pose_tensor, feed_dict={inputs: frames})
+            pose[:, [0,1,2]] = pose[:, [1,0,2]] #change order to have x,y,confidence
+            pose=np.reshape(pose,(batchsize,-1)) #bring into batchsize times x,y,conf etc.
+            PredictedData[batch_num*batchsize:(batch_num+1)*batchsize, :] = pose
 
-                if batch_ind==batchsize-1:
-                    #pose = predict.getposeNP(frames,dlc_cfg, sess, inputs, outputs)
-                    pose = sess.run(pose_tensor, feed_dict={inputs: frames})
-                    pose[:, [0,1,2]] = pose[:, [1,0,2]] #change order to have x,y,confidence
-                    pose=np.reshape(pose,(batchsize,-1)) #bring into batchsize times x,y,conf etc.
-                    PredictedData[batch_num*batchsize:(batch_num+1)*batchsize, :] = pose
-
-                    batch_ind = 0
-                    batch_num += 1
-                else:
-                   batch_ind+=1
-            else:
-                nframes = counter
-                print("Detected frames: ", nframes)
-                if batch_ind>0:
-                    #pose = predict.getposeNP(frames, dlc_cfg, sess, inputs, outputs) #process the whole batch (some frames might be from previous batch!)
-                    pose = sess.run(pose_tensor, feed_dict={inputs: frames})
-                    pose[:, [0,1,2]] = pose[:, [1,0,2]]
-                    pose=np.reshape(pose,(batchsize,-1))
-                    PredictedData[batch_num*batchsize:batch_num*batchsize+batch_ind, :] = pose[:batch_ind,:]
-
-                break
-            counter+=1
-
+            batch_ind = 0
+            batch_num += 1
+        else:
+            batch_ind +=1
+        counter+=1
     pbar.close()
+    nframes = counter
+    print("Detected frames: ", nframes)
+    if batch_ind>0:
+        pose = sess.run(pose_tensor, feed_dict={inputs: frames})
+        pose[:, [0,1,2]] = pose[:, [1,0,2]]
+        pose=np.reshape(pose,(batchsize,-1))
+        PredictedData[batch_num*batchsize:batch_num*batchsize+batch_ind, :] = pose[:batch_ind,:]
     return PredictedData,nframes
 
 def getboundingbox(x,y,nx,ny,margin):
@@ -495,17 +459,7 @@ def AnalyzeVideo(video,DLCscorer,DLCscorerlegacy,trainFraction,cfg,dlc_cfg,sess,
     if dynamic_analysis_state:
         PredictedData,nframes=GetPoseDynamic(cfg,dlc_cfg, sess, inputs, outputs, picker, detectiontreshold,margin)
     else:
-        if int(dlc_cfg["batch_size"])>1:
-            if TFGPUinference:
-                PredictedData,nframes=GetPoseF_GTF(cfg,dlc_cfg, sess, inputs, outputs, picker ,int(dlc_cfg["batch_size"]))
-            else:
-                PredictedData,nframes=GetPoseF(cfg,dlc_cfg, sess, inputs, outputs, picker ,int(dlc_cfg["batch_size"]))
-        else:
-            if TFGPUinference:
-                PredictedData,nframes=GetPoseS_GTF(cfg,dlc_cfg, sess, inputs, outputs, picker)
-            else:
-                PredictedData,nframes=GetPoseS(cfg,dlc_cfg, sess, inputs, outputs, picker)
-
+        PredictedData,nframes = get_pose(cfg, dlc_cfg, sess, inputs, outputs, picker, int(dlc_cfg["batch_size"]), use_gpu=TFGPUinference)
     stop = time.time()
 
     dictionary = {

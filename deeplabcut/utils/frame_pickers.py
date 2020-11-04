@@ -7,6 +7,7 @@ Please see AUTHORS for contributors.
 https://github.com/AlexEMG/DeepLabCut/blob/master/AUTHORS
 Licensed under GNU Lesser General Public License v3.0
 """
+from pathlib import Path as _Path
 import numpy as np
 import os
 from traceback import print_exc as _print_exc
@@ -223,13 +224,30 @@ class SkVideoPicker(FramePicker):
     """an experimental, rather slow frame picker based on scikit-video/ffmpeg."""
     driver = "skvideo"
 
+    @classmethod
+    def probe_fps(cls, path, default=1):
+        import subprocess as sp
+        import re
+        out = sp.run(["ffprobe", str(_Path(path).resolve())],
+                     check=True,
+                     capture_output=True).stderr.decode('utf-8')
+        pat = re.compile(r', (\d+) fps,')
+        for line in out.split("\n"):
+            contains_fps = pat.search(line)
+            if contains_fps:
+                try:
+                    return int(contains_fps.group(1))
+                except:
+                    return default
+        return defualt
+
     def __init__(self, path):
         super(SkVideoPicker, self).__init__(path)
         self.reader   = FFmpegReader(str(path))
         self.is_open  = True
         self.nframes, self.width, self.height, self.nchan = self._getinfo()
         self.duration = self.nframes
-        self.fps      = 1
+        self.fps      = self.probe_fps(path)
         self.iterator = None
         self.offset   = 0
 

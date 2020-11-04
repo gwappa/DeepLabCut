@@ -395,7 +395,7 @@ def create_labeled_video(config,
 
         print("Loading ", video, "and data.")
         datafound,metadata,Dataframe,DLCscorer,suffix=auxiliaryfunctions.LoadAnalyzedData(str(videofolder),vname,DLCscorer,filtered) #returns boolean variable if data was found and metadata + pandas array
-        videooutname = video.with_name(vname + DLCscorer+suffix+'_labeled.mp4')
+        videooutpath = Path(destfolder) / (vname + DLCscorer+suffix+'_labeled.mp4')
         if datafound:
             #Loading cropping data used during analysis
             cropping=metadata['data']["cropping"]
@@ -406,13 +406,13 @@ def create_labeled_video(config,
                     tmpfolder.mkdir(parents=True)
                 clip = vp(video)
 
-                CreateVideoSlow(videooutname,clip,Dataframe,tmpfolder,cfg["dotsize"],cfg["colormap"],cfg["alphavalue"],cfg["pcutoff"],trailpoints,cropping,x1,x2,y1,y2,delete,DLCscorer,bodyparts,outputframerate,Frames2plot,bodyparts2connect,skeleton_color,draw_skeleton,displaycropped)
+                CreateVideoSlow(videooutpath,clip,Dataframe,tmpfolder,cfg["dotsize"],cfg["colormap"],cfg["alphavalue"],cfg["pcutoff"],trailpoints,cropping,x1,x2,y1,y2,delete,DLCscorer,bodyparts,outputframerate,Frames2plot,bodyparts2connect,skeleton_color,draw_skeleton,displaycropped)
             else:
                 if displaycropped: #then the cropped video + the labels is depicted
-                    clip = vp(fname = video,sname = videooutname,codec=codec,sw=x2-x1,sh=y2-y1)
+                    clip = vp(fname = video,sname = videooutpath,codec=codec,sw=x2-x1,sh=y2-y1)
                     CreateVideo(clip,Dataframe,cfg["pcutoff"],cfg["dotsize"],cfg["colormap"],DLCscorer,bodyparts,trailpoints,cropping,x1,x2,y1,y2,bodyparts2connect,skeleton_color,draw_skeleton,displaycropped)
                 else: #then the full video + the (perhaps in cropped mode analyzed labels) are depicted
-                    clip = vp(fname = video,sname = videooutname,codec=codec)
+                    clip = vp(fname = video,sname = videooutpath,codec=codec)
                     CreateVideo(clip,Dataframe,cfg["pcutoff"],cfg["dotsize"],cfg["colormap"],DLCscorer,bodyparts,trailpoints,cropping,x1,x2,y1,y2,bodyparts2connect,skeleton_color,draw_skeleton,displaycropped)
 
     # os.chdir(str(start_path)) KS200721

@@ -30,7 +30,7 @@ class FrameWriter(object):
 
     def write(self, frame):
         self._write(frame)
-        
+
 try:
     import cv2
     class CV2Writer(FrameWriter):
@@ -39,7 +39,7 @@ try:
 
         def _open(self, fourcc="mp4v", **kwargs):
             self._out = cv2.VideoWriter(str(self.path),
-                                        cv2.VideoWriter_fourcc(fourcc),
+                                        cv2.VideoWriter_fourcc(*fourcc),
                                         self.fps,
                                         (self.width, self.height),
                                         True)
